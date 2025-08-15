@@ -8,8 +8,8 @@ from decimal import Decimal
 from typing import List, Optional, Dict, Any
 
 from sqlalchemy import (
-    Column, Integer, String, Date, DECIMAL, Text, Boolean,
-    ForeignKey, CheckConstraint, Index, UniqueConstraint, Computed
+    Column, Integer, String, Date, DECIMAL, Text, Boolean, DateTime,
+    ForeignKey, CheckConstraint, Index, UniqueConstraint, Computed, func
 )
 from sqlalchemy.orm import relationship, validates
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -36,7 +36,7 @@ class BillOfMaterials(BaseModel, AuditMixin):
         ),
         CheckConstraint("labor_cost_per_unit >= 0", name='chk_bom_labor_cost'),
         CheckConstraint("overhead_cost_per_unit >= 0", name='chk_bom_overhead_cost'),
-        CheckConstraint("bom_version ~ '^\\d+\\.\\d+$'", name='chk_bom_version_format'),
+        # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
         CheckConstraint(
             "expiry_date IS NULL OR expiry_date > effective_date",
             name='chk_bom_effective_dates'
@@ -290,14 +290,14 @@ class BomCostCalculation(BaseModel):
         # Performance indexes
         Index('idx_bom_cost_current', 'bom_id', 'is_current',
               postgresql_where="is_current = TRUE"),
-        Index('idx_bom_cost_date', 'calculation_date DESC'),
+        Index('idx_bom_cost_date', 'calculation_date'),
     )
     
     bom_cost_id = Column(Integer, primary_key=True)
     bom_id = Column(Integer, ForeignKey('bill_of_materials.bom_id', ondelete='CASCADE'), 
                    nullable=False)
-    calculation_date = Column('calculation_date', 'TIMESTAMP', 
-                             nullable=False, default='CURRENT_TIMESTAMP')
+    calculation_date = Column(DateTime, 
+                             nullable=False, default=func.current_timestamp())
     
     material_cost = CurrencyColumn.create('material_cost', default=Decimal('0'))
     labor_cost = CurrencyColumn.create('labor_cost', default=Decimal('0'))

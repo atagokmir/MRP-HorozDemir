@@ -34,10 +34,7 @@ class InventoryItem(BaseModel):
             "quality_status IN ('PENDING', 'APPROVED', 'REJECTED', 'QUARANTINE')",
             name='chk_inventory_quality_status'
         ),
-        CheckConstraint(
-            "batch_number ~ '^[A-Z0-9\\-]{3,50}$'",
-            name='chk_inventory_batch_format'
-        ),
+        # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
         CheckConstraint("entry_date <= CURRENT_TIMESTAMP", name='chk_inventory_entry_date'),
         CheckConstraint(
             "expiry_date IS NULL OR expiry_date > entry_date",
@@ -118,18 +115,24 @@ class InventoryItem(BaseModel):
             raise ValueError("expiry_date must be after entry_date")
         return expiry_date
     
-    @validates('quantity_in_stock', 'reserved_quantity', 'unit_cost')
+    @validates('quantity_in_stock', 'unit_cost')
     def validate_positive_values(self, key, value):
         if value is not None and value < 0:
             raise ValueError(f"{key} must be non-negative")
         return value
     
     @validates('reserved_quantity')
-    def validate_reserved_vs_stock(self, key, reserved_quantity):
+    def validate_reserved_quantity(self, key, reserved_quantity):
+        # Check for non-negative value
+        if reserved_quantity is not None and reserved_quantity < 0:
+            raise ValueError("reserved_quantity must be non-negative")
+        
+        # Check reserved doesn't exceed available stock
         if (reserved_quantity is not None and 
             self.quantity_in_stock is not None and 
             reserved_quantity > self.quantity_in_stock):
             raise ValueError("reserved_quantity cannot exceed quantity_in_stock")
+        
         return reserved_quantity
     
     @validates('quality_status')
@@ -238,18 +241,16 @@ class StockMovement(BaseModel):
             "('PURCHASE_ORDER', 'PRODUCTION_ORDER', 'TRANSFER', 'ADJUSTMENT', 'RETURN', 'SALE')",
             name='chk_movement_reference_type'
         ),
-        CheckConstraint(
-            "movement_date <= CURRENT_TIMESTAMP + INTERVAL '1 hour'",
-            name='chk_movement_date'
-        ),
+        # PostgreSQL INTERVAL syntax not supported in SQLite, simplified constraint
+        CheckConstraint("movement_date <= CURRENT_TIMESTAMP", name='chk_movement_date'),
         CheckConstraint(
             "(movement_type != 'TRANSFER') OR "
             "(movement_type = 'TRANSFER' AND from_warehouse_id IS NOT NULL AND to_warehouse_id IS NOT NULL)",
             name='chk_transfer_warehouses'
         ),
         # Performance indexes
-        Index('idx_stock_movements_item_date', 'inventory_item_id', 'movement_date DESC'),
-        Index('idx_stock_movements_type_date', 'movement_type', 'movement_date DESC'),
+        Index('idx_stock_movements_item_date', 'inventory_item_id', 'movement_date'),
+        Index('idx_stock_movements_type_date', 'movement_type', 'movement_date'),
         Index('idx_stock_movements_reference', 'reference_type', 'reference_id'),
     )
     

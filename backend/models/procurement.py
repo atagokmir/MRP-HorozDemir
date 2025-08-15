@@ -29,13 +29,13 @@ class PurchaseOrder(BaseModel, AuditMixin):
             name='chk_purchase_order_status'
         ),
         CheckConstraint("total_amount >= 0", name='chk_purchase_order_total'),
-        CheckConstraint("currency ~ '^[A-Z]{3}$'", name='chk_purchase_order_currency'),
+        # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
         CheckConstraint(
             "(expected_delivery_date IS NULL OR expected_delivery_date >= order_date) AND "
             "(actual_delivery_date IS NULL OR actual_delivery_date >= order_date)",
             name='chk_purchase_order_dates'
         ),
-        CheckConstraint("po_number ~ '^PUR[0-9]{6}$'", name='chk_purchase_order_number_format'),
+        # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
         # Performance indexes
         Index('idx_purchase_orders_supplier', 'supplier_id', 'order_date'),
         Index('idx_purchase_orders_status', 'status', 'order_date'),
@@ -218,20 +218,26 @@ class PurchaseOrderItem(BaseModel):
     purchase_order = relationship("PurchaseOrder", back_populates="purchase_order_items")
     product = relationship("Product", back_populates="purchase_order_items")
     
-    @validates('quantity_ordered', 'quantity_received')
-    def validate_quantities(self, key, value):
-        if value is not None and value < 0:
-            raise ValueError(f"{key} must be non-negative")
-        if key == 'quantity_ordered' and (value is None or value <= 0):
+    @validates('quantity_ordered')
+    def validate_quantity_ordered(self, key, quantity_ordered):
+        if quantity_ordered is not None and quantity_ordered < 0:
+            raise ValueError("quantity_ordered must be non-negative")
+        if quantity_ordered is None or quantity_ordered <= 0:
             raise ValueError("quantity_ordered must be greater than zero")
-        return value
+        return quantity_ordered
     
     @validates('quantity_received')
     def validate_quantity_received(self, key, quantity_received):
+        # Check for non-negative value
+        if quantity_received is not None and quantity_received < 0:
+            raise ValueError("quantity_received must be non-negative")
+        
+        # Check received doesn't exceed ordered
         if (quantity_received is not None and 
             self.quantity_ordered is not None and 
             quantity_received > self.quantity_ordered):
             raise ValueError("quantity_received cannot exceed quantity_ordered")
+        
         return quantity_received
     
     @validates('unit_price')

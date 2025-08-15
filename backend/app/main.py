@@ -220,10 +220,10 @@ async def version_info():
     }
 
 
-# Include API routers
+# Include API routers with /api/v1 prefix
 app.include_router(
     auth_router,
-    prefix="/auth",
+    prefix="/api/v1/auth",
     tags=["Authentication"],
     responses={
         401: {"description": "Authentication failed"},
@@ -233,7 +233,7 @@ app.include_router(
 
 app.include_router(
     master_data_router,
-    prefix="/master-data",
+    prefix="/api/v1/master-data",
     tags=["Master Data"],
     dependencies=[],  # Authentication will be handled at endpoint level
     responses={
@@ -245,7 +245,7 @@ app.include_router(
 
 app.include_router(
     inventory_router,
-    prefix="/inventory",
+    prefix="/api/v1/inventory",
     tags=["Inventory Management"],
     dependencies=[],
     responses={
@@ -257,7 +257,7 @@ app.include_router(
 
 app.include_router(
     bom_router,
-    prefix="/bom",
+    prefix="/api/v1/bom",
     tags=["Bill of Materials"],
     dependencies=[],
     responses={
@@ -269,7 +269,7 @@ app.include_router(
 
 app.include_router(
     production_router,
-    prefix="/production",
+    prefix="/api/v1/production",
     tags=["Production Management"],
     dependencies=[],
     responses={
@@ -281,7 +281,7 @@ app.include_router(
 
 app.include_router(
     procurement_router,
-    prefix="/procurement",
+    prefix="/api/v1/procurement",
     tags=["Procurement"],
     dependencies=[],
     responses={
@@ -292,7 +292,7 @@ app.include_router(
 
 app.include_router(
     reporting_router,
-    prefix="/reports",
+    prefix="/api/v1/reports",
     tags=["Reporting & Analytics"],
     dependencies=[],
     responses={

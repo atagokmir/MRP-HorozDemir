@@ -9,7 +9,7 @@ from typing import Optional, List
 from pydantic import Field, validator
 from app.schemas.base import (
     BaseSchema, TimestampMixin, QualityStatus, MovementType,
-    BatchNumber, validate_positive_decimal, validate_non_negative_decimal
+    validate_batch_number, validate_positive_decimal, validate_non_negative_decimal
 )
 from app.schemas.master_data import ProductSummary, SupplierSummary
 
@@ -27,9 +27,13 @@ class StockInRequest(BaseSchema):
     """Stock in operation request."""
     product_id: int = Field(..., description="Product ID")
     warehouse_id: int = Field(..., description="Warehouse ID")
-    quantity: Decimal = Field(..., gt=0, decimal_places=3, description="Quantity to add")
-    unit_cost: Decimal = Field(..., ge=0, decimal_places=4, description="Cost per unit")
-    batch_number: BatchNumber = Field(..., description="Batch/lot number")
+    quantity: Decimal = Field(..., gt=0, description="Quantity to add")
+    unit_cost: Decimal = Field(..., ge=0, description="Cost per unit")
+    batch_number: str = Field(..., description="Batch/lot number")
+    
+    @validator('batch_number')
+    def validate_batch_number_field(cls, v):
+        return validate_batch_number(v)
     supplier_id: Optional[int] = Field(None, description="Supplier ID (if from purchase)")
     purchase_order_id: Optional[int] = Field(None, description="Purchase order ID")
     quality_status: QualityStatus = Field(QualityStatus.PENDING, description="Quality status")
@@ -58,7 +62,7 @@ class StockOutRequest(BaseSchema):
     """Stock out operation request."""
     product_id: int = Field(..., description="Product ID")
     warehouse_id: int = Field(..., description="Warehouse ID")
-    quantity: Decimal = Field(..., gt=0, decimal_places=3, description="Quantity to remove")
+    quantity: Decimal = Field(..., gt=0, description="Quantity to remove")
     reason: str = Field(..., min_length=1, max_length=200, description="Reason for stock out")
     reference_number: Optional[str] = Field(None, max_length=50, description="Reference number")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
@@ -72,7 +76,7 @@ class StockOutRequest(BaseSchema):
 class StockAdjustmentRequest(BaseSchema):
     """Stock adjustment operation request."""
     inventory_item_id: int = Field(..., description="Inventory item ID")
-    adjustment_quantity: Decimal = Field(..., decimal_places=3, description="Adjustment quantity (can be negative)")
+    adjustment_quantity: Decimal = Field(..., description="Adjustment quantity (can be negative)")
     reason: str = Field(..., min_length=1, max_length=200, description="Reason for adjustment")
     reference_number: Optional[str] = Field(None, max_length=50, description="Reference number")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
@@ -83,7 +87,7 @@ class StockTransferRequest(BaseSchema):
     product_id: int = Field(..., description="Product ID")
     from_warehouse_id: int = Field(..., description="Source warehouse ID")
     to_warehouse_id: int = Field(..., description="Destination warehouse ID")
-    quantity: Decimal = Field(..., gt=0, decimal_places=3, description="Quantity to transfer")
+    quantity: Decimal = Field(..., gt=0, description="Quantity to transfer")
     reason: Optional[str] = Field(None, max_length=200, description="Transfer reason")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
     
@@ -106,9 +110,9 @@ class InventoryItemBase(BaseSchema):
     product_id: int
     warehouse_id: int
     batch_number: str
-    quantity_in_stock: Decimal = Field(..., ge=0, decimal_places=3)
-    reserved_quantity: Decimal = Field(0, ge=0, decimal_places=3)
-    unit_cost: Decimal = Field(..., ge=0, decimal_places=4)
+    quantity_in_stock: Decimal = Field(..., ge=0)
+    reserved_quantity: Decimal = Field(0, ge=0)
+    unit_cost: Decimal = Field(..., ge=0)
     quality_status: QualityStatus
     expiry_date: Optional[date] = None
     supplier_id: Optional[int] = None
@@ -160,12 +164,12 @@ class InventoryItemList(BaseSchema):
 
 
 # Stock movement schemas
-class StockMovement(BaseSchema, TimestampMixin):
+class StockMovement(TimestampMixin):
     """Stock movement record."""
     stock_movement_id: int
     inventory_item_id: int
     movement_type: MovementType
-    quantity: Decimal = Field(..., decimal_places=3)
+    quantity: Decimal = Field(...)
     movement_date: datetime
     reference_type: Optional[str] = None
     reference_id: Optional[int] = None
@@ -189,7 +193,7 @@ class StockAllocationRequest(BaseSchema):
     """Stock allocation request."""
     product_id: int = Field(..., description="Product ID")
     warehouse_id: int = Field(..., description="Warehouse ID")
-    quantity: Decimal = Field(..., gt=0, decimal_places=3, description="Quantity to allocate")
+    quantity: Decimal = Field(..., gt=0, description="Quantity to allocate")
     production_order_id: Optional[int] = Field(None, description="Production order ID")
     reference_type: Optional[str] = Field(None, max_length=50, description="Reference type")
     reference_id: Optional[int] = Field(None, description="Reference ID")
@@ -201,13 +205,13 @@ class StockAllocationRequest(BaseSchema):
         return validate_positive_decimal(v, "Quantity")
 
 
-class StockAllocation(BaseSchema, TimestampMixin):
+class StockAllocation(TimestampMixin):
     """Stock allocation record."""
     stock_allocation_id: int
     production_order_id: Optional[int] = None
     inventory_item_id: int
-    allocated_quantity: Decimal = Field(..., decimal_places=3)
-    consumed_quantity: Decimal = Field(0, decimal_places=3)
+    allocated_quantity: Decimal = Field(...)
+    consumed_quantity: Decimal = Field(0)
     allocation_date: datetime
     consumption_date: Optional[datetime] = None
     reference_type: Optional[str] = None
@@ -236,13 +240,13 @@ class InventoryAvailability(BaseSchema):
     """Inventory availability summary."""
     product_id: int
     warehouse_id: Optional[int] = None
-    total_in_stock: Decimal = Field(..., ge=0, decimal_places=3)
-    total_reserved: Decimal = Field(..., ge=0, decimal_places=3)
-    total_available: Decimal = Field(..., ge=0, decimal_places=3)
-    weighted_average_cost: Decimal = Field(..., ge=0, decimal_places=4)
+    total_in_stock: Decimal = Field(..., ge=0)
+    total_reserved: Decimal = Field(..., ge=0)
+    total_available: Decimal = Field(..., ge=0)
+    weighted_average_cost: Decimal = Field(..., ge=0)
     oldest_batch_date: Optional[datetime] = None
     newest_batch_date: Optional[datetime] = None
-    expired_quantity: Decimal = Field(0, ge=0, decimal_places=3)
+    expired_quantity: Decimal = Field(0, ge=0)
     batches: List[InventoryItem] = []
 
 
@@ -250,9 +254,9 @@ class FIFOAllocationItem(BaseSchema):
     """FIFO allocation breakdown item."""
     inventory_item_id: int
     batch_number: str
-    allocated_quantity: Decimal = Field(..., decimal_places=3)
-    unit_cost: Decimal = Field(..., decimal_places=4)
-    total_cost: Decimal = Field(..., decimal_places=4)
+    allocated_quantity: Decimal = Field(...)
+    unit_cost: Decimal = Field(...)
+    total_cost: Decimal = Field(...)
     entry_date: datetime
 
 
@@ -260,11 +264,11 @@ class FIFOAllocationResult(BaseSchema):
     """FIFO allocation result."""
     product_id: int
     warehouse_id: int
-    requested_quantity: Decimal = Field(..., decimal_places=3)
-    allocated_quantity: Decimal = Field(..., decimal_places=3)
-    shortage_quantity: Decimal = Field(..., decimal_places=3)
-    weighted_average_cost: Decimal = Field(..., decimal_places=4)
-    total_cost: Decimal = Field(..., decimal_places=4)
+    requested_quantity: Decimal = Field(...)
+    allocated_quantity: Decimal = Field(...)
+    shortage_quantity: Decimal = Field(...)
+    weighted_average_cost: Decimal = Field(...)
+    total_cost: Decimal = Field(...)
     allocations: List[FIFOAllocationItem]
 
 
@@ -281,11 +285,11 @@ class InventoryValuation(BaseSchema):
     """Inventory valuation summary."""
     product_id: int
     warehouse_id: Optional[int] = None
-    total_quantity: Decimal = Field(..., decimal_places=3)
-    total_value: Decimal = Field(..., decimal_places=4)
-    average_cost: Decimal = Field(..., decimal_places=4)
-    fifo_cost: Decimal = Field(..., decimal_places=4)
-    cost_variance: Decimal = Field(..., decimal_places=4)
+    total_quantity: Decimal = Field(...)
+    total_value: Decimal = Field(...)
+    average_cost: Decimal = Field(...)
+    fifo_cost: Decimal = Field(...)
+    cost_variance: Decimal = Field(...)
 
 
 class CriticalStockItem(BaseSchema):
@@ -296,11 +300,11 @@ class CriticalStockItem(BaseSchema):
     warehouse_id: int
     warehouse_code: str
     warehouse_name: str
-    current_stock: Decimal = Field(..., decimal_places=3)
-    critical_level: Decimal = Field(..., decimal_places=3)
-    shortage: Decimal = Field(..., decimal_places=3)
+    current_stock: Decimal = Field(...)
+    critical_level: Decimal = Field(...)
+    shortage: Decimal = Field(...)
     last_movement_date: Optional[datetime] = None
-    suggested_reorder_quantity: Optional[Decimal] = Field(None, decimal_places=3)
+    suggested_reorder_quantity: Optional[Decimal] = Field(None)
 
 
 class CriticalStockReport(BaseSchema):

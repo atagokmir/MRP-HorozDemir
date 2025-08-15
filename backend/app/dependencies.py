@@ -3,21 +3,22 @@ FastAPI dependency injection system for the Horoz Demir MRP System.
 Manages database sessions, authentication, authorization, and common utilities.
 """
 
-from typing import AsyncGenerator, Optional, List
+from typing import Generator, Optional, List
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from sqlalchemy import select
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 import redis.asyncio as redis
 
-from database import async_session
+from database import SessionLocal
 from app.config import settings
 from models import User
 from app.schemas.auth import UserInfo, TokenData
 from app.exceptions import AuthenticationError, AuthorizationError
+from typing import AsyncGenerator
 
 
 # Security setup
@@ -26,20 +27,19 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 # Database dependency
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+def get_db() -> Generator[Session, None, None]:
     """
     Database session dependency with automatic transaction management.
-    Provides async database session with commit/rollback handling.
+    Provides database session with commit/rollback handling.
     """
-    async with async_session() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+    session = SessionLocal()
+    try:
+        yield session
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 # Redis dependency
@@ -90,7 +90,7 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-async def verify_token(token: str, token_type: str = "access") -> TokenData:
+def verify_token(token: str, token_type: str = "access") -> TokenData:
     """
     Verify JWT token and return token data.
     
@@ -112,11 +112,16 @@ async def verify_token(token: str, token_type: str = "access") -> TokenData:
             raise AuthenticationError(f"Invalid token type. Expected {token_type}")
         
         # Extract user information
-        user_id: int = payload.get("sub")
+        user_id_str = payload.get("sub")
         username: str = payload.get("username")
         
-        if user_id is None or username is None:
+        if user_id_str is None or username is None:
             raise AuthenticationError("Invalid token payload")
+        
+        try:
+            user_id = int(user_id_str)
+        except (ValueError, TypeError):
+            raise AuthenticationError("Invalid user ID in token")
         
         return TokenData(user_id=user_id, username=username)
         
@@ -125,10 +130,10 @@ async def verify_token(token: str, token_type: str = "access") -> TokenData:
 
 
 # Authentication dependencies
-async def get_current_user(
+def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    session: AsyncSession = Depends(get_db),
-    redis_client: redis.Redis = Depends(get_redis)
+    session: Session = Depends(get_db)
+    # redis_client: redis.Redis = Depends(get_redis)  # Disabled for debugging
 ) -> UserInfo:
     """
     Get current authenticated user from JWT token.
@@ -148,17 +153,18 @@ async def get_current_user(
         raise AuthenticationError("Missing authentication token")
     
     # Verify token
-    token_data = await verify_token(credentials.credentials, "access")
+    token_data = verify_token(credentials.credentials, "access")
     
-    # Check if token is blacklisted (logout)
-    if redis_client:
-        is_blacklisted = await redis_client.get(f"blacklist:{credentials.credentials}")
-        if is_blacklisted:
-            raise AuthenticationError("Token has been revoked")
+    # Check if token is blacklisted (logout) - simplified for debugging
+    # TODO: Re-enable Redis token blacklist checking
+    # if redis_client:
+    #     is_blacklisted = await redis_client.get(f"blacklist:{credentials.credentials}")
+    #     if is_blacklisted:
+    #         raise AuthenticationError("Token has been revoked")
     
     # Get user from database
     query = select(User).where(User.user_id == token_data.user_id)
-    result = await session.execute(query)
+    result = session.execute(query)
     user = result.scalar_one_or_none()
     
     if not user:
@@ -170,7 +176,7 @@ async def get_current_user(
     return UserInfo.from_orm(user)
 
 
-async def get_current_active_user(
+def get_current_active_user(
     current_user: UserInfo = Depends(get_current_user)
 ) -> UserInfo:
     """Get current active user (additional validation layer)."""
@@ -203,7 +209,20 @@ class PermissionChecker:
 # Permission factory functions
 def require_permissions(*permissions: str):
     """Create permission dependency for specific permissions."""
-    return Depends(PermissionChecker(list(permissions)))
+    def permission_checker(current_user: UserInfo = Depends(get_current_active_user)) -> UserInfo:
+        """Check if user has required permissions."""
+        user_permissions = set(current_user.permissions)
+        required_permissions = set(permissions)
+        
+        if not required_permissions.issubset(user_permissions):
+            missing_permissions = required_permissions - user_permissions
+            raise AuthorizationError(
+                f"Missing required permissions: {', '.join(missing_permissions)}"
+            )
+        
+        return current_user
+    
+    return Depends(permission_checker)
 
 
 def require_admin():
@@ -317,10 +336,10 @@ async def get_user_context(
 
 
 # Database session with user context
-async def get_db_with_user(
-    session: AsyncSession = Depends(get_db),
+def get_db_with_user(
+    session: Session = Depends(get_db),
     user_context: dict = Depends(get_user_context)
-) -> AsyncSession:
+) -> Session:
     """Get database session with user context for audit trails."""
     # Add user context to session for audit purposes
     session.user_id = user_context["user_id"]

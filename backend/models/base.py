@@ -7,7 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from sqlalchemy import Column, DateTime, Boolean, func, event, text
+from sqlalchemy import Column, DateTime, Boolean, String, func, event, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import Session
@@ -149,8 +149,7 @@ class AuditMixin:
     @declared_attr
     def created_by(cls):
         return Column(
-            "created_by",
-            "VARCHAR(100)",
+            String(100),
             nullable=True,
             comment="User who created the record"
         )
@@ -158,8 +157,7 @@ class AuditMixin:
     @declared_attr
     def updated_by(cls):
         return Column(
-            "updated_by", 
-            "VARCHAR(100)",
+            String(100),
             nullable=True,
             comment="User who last updated the record"
         )

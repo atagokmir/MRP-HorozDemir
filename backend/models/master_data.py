@@ -27,10 +27,7 @@ class Warehouse(BaseModel, ActiveRecordMixin):
             "warehouse_type IN ('RAW_MATERIALS', 'SEMI_FINISHED', 'FINISHED_PRODUCTS', 'PACKAGING')",
             name='chk_warehouse_type'
         ),
-        CheckConstraint(
-            "warehouse_code ~ '^[A-Z0-9]{2,10}$'",
-            name='chk_warehouse_code_format'
-        ),
+        # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
         Index('idx_warehouses_type', 'warehouse_type'),
         Index('idx_warehouses_active', 'is_active', postgresql_where='is_active = true'),
     )
@@ -86,10 +83,7 @@ class Product(BaseModel, ActiveRecordMixin):
             name='chk_stock_levels'
         ),
         CheckConstraint("standard_cost >= 0", name='chk_standard_cost'),
-        CheckConstraint(
-            "product_code ~ '^[A-Z0-9\\-]{3,50}$'",
-            name='chk_product_code_format'
-        ),
+        # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
         Index('idx_products_type_active', 'product_type', 'is_active', postgresql_where='is_active = true'),
         Index('idx_products_stock_levels', 'product_type', 'minimum_stock_level', 'critical_stock_level', 
               postgresql_where='is_active = true'),
@@ -136,18 +130,24 @@ class Product(BaseModel, ActiveRecordMixin):
             raise ValueError("product_code must be 3-50 characters")
         return product_code.upper()
     
-    @validates('minimum_stock_level', 'critical_stock_level', 'standard_cost')
+    @validates('minimum_stock_level', 'standard_cost')
     def validate_positive_decimal(self, key, value):
         if value is not None and value < 0:
             raise ValueError(f"{key} must be non-negative")
         return value
     
     @validates('critical_stock_level')
-    def validate_critical_vs_minimum(self, key, critical_stock_level):
+    def validate_critical_stock_level(self, key, critical_stock_level):
+        # Check for non-negative value
+        if critical_stock_level is not None and critical_stock_level < 0:
+            raise ValueError("critical_stock_level must be non-negative")
+        
+        # Check critical level doesn't exceed minimum level
         if (critical_stock_level is not None and 
             self.minimum_stock_level is not None and 
             critical_stock_level > self.minimum_stock_level):
             raise ValueError("critical_stock_level cannot exceed minimum_stock_level")
+        
         return critical_stock_level
     
     @hybrid_property
@@ -196,14 +196,7 @@ class Supplier(BaseModel, ActiveRecordMixin, AuditMixin):
         CheckConstraint("quality_rating >= 0.0 AND quality_rating <= 5.0", name='chk_quality_rating'),
         CheckConstraint("delivery_rating >= 0.0 AND delivery_rating <= 5.0", name='chk_delivery_rating'),
         CheckConstraint("price_rating >= 0.0 AND price_rating <= 5.0", name='chk_price_rating'),
-        CheckConstraint(
-            "email IS NULL OR email ~ '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'",
-            name='chk_email_format'
-        ),
-        CheckConstraint(
-            "supplier_code ~ '^[A-Z0-9]{2,20}$'",
-            name='chk_supplier_code_format'
-        ),
+        # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
         Index('idx_suppliers_performance', 'quality_rating', 'delivery_rating', 'price_rating',
               postgresql_where='is_active = true'),
     )

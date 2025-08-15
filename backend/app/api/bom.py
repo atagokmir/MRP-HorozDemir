@@ -6,7 +6,7 @@ Handles BOM management, component relationships, and cost calculations.
 from typing import List, Optional
 from decimal import Decimal
 from fastapi import APIRouter, Depends, Query, Path
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.dependencies import (
     get_db, get_current_active_user, require_permissions,
@@ -40,13 +40,13 @@ class BOMCostCalculation:
     pass
 
 
-@router.get("/list", response_model=PaginatedResponse[BOM])
-async def list_boms(
+@router.get("/list")  # TODO: # response_model=PaginatedResponse[BOM]
+def list_boms(
     pagination: PaginationParams = Depends(get_pagination_params),
     product_id: Optional[int] = Query(None, description="Filter by product ID"),
     status: Optional[str] = Query(None, description="Filter by status"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("read:bom"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("read:bom")
 ):
     """
     List BOMs with filtering and pagination.
@@ -67,22 +67,22 @@ async def list_boms(
     )
 
 
-@router.get("/{bom_id}", response_model=BOM)
-async def get_bom(
+@router.get("/{bom_id}")  # TODO: Add proper BOM response model
+def get_bom(
     bom_id: int = Path(..., description="BOM ID"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("read:bom"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("read:bom")
 ):
     """Get BOM by ID with components."""
     # TODO: Implement BOM retrieval
     raise NotFoundError("BOM", bom_id)
 
 
-@router.post("/create", response_model=IDResponse)
-async def create_bom(
-    bom_create: BOMCreate,
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("write:bom"))
+@router.post("/create")  # TODO: response_model=IDResponse)
+def create_bom(
+    # bom_create: BOMCreate,  # TODO: Implement proper BOM schema
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("write:bom")
 ):
     """
     Create new BOM with components.
@@ -93,24 +93,24 @@ async def create_bom(
     return IDResponse(id=1, message="BOM created successfully")
 
 
-@router.put("/{bom_id}", response_model=BOM)
-async def update_bom(
+@router.put("/{bom_id}")  # TODO: # response_model=BOM
+def update_bom(
     bom_id: int = Path(..., description="BOM ID"),
-    bom_update: BOMUpdate = ...,
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("write:bom"))
+    # bom_update: BOMUpdate = ...,  # TODO: Implement proper BOM schema
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("write:bom")
 ):
     """Update BOM information and components."""
     # TODO: Implement BOM update
     raise NotFoundError("BOM", bom_id)
 
 
-@router.get("/{bom_id}/explosion", response_model=BOMExplosion)
-async def explode_bom(
+@router.get("/{bom_id}/explosion")  # TODO: # response_model=BOMExplosion
+def explode_bom(
     bom_id: int = Path(..., description="BOM ID"),
     quantity: Decimal = Query(Decimal('1'), description="Quantity multiplier"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("read:bom"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("read:bom")
 ):
     """
     Explode BOM to all raw material requirements.
@@ -129,12 +129,12 @@ async def explode_bom(
     )
 
 
-@router.post("/{bom_id}/cost-calculation", response_model=BOMCostCalculation)
-async def calculate_bom_cost(
+@router.post("/{bom_id}/cost-calculation")  # TODO: # response_model=BOMCostCalculation
+def calculate_bom_cost(
     bom_id: int = Path(..., description="BOM ID"),
     quantity: Decimal = Query(Decimal('1'), description="Quantity for calculation"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("read:bom"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("read:bom")
 ):
     """
     Calculate BOM cost based on current inventory.
@@ -152,12 +152,12 @@ async def calculate_bom_cost(
     )
 
 
-@router.put("/{bom_id}/status", response_model=BOM)
-async def update_bom_status(
+@router.put("/{bom_id}/status")  # TODO: # response_model=BOM
+def update_bom_status(
     bom_id: int = Path(..., description="BOM ID"),
     status: str = Query(..., description="New status"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("write:bom"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("write:bom")
 ):
     """
     Update BOM status (activate, obsolete, etc.).

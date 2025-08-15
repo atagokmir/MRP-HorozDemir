@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from sqlalchemy import select, update
 import redis.asyncio as redis
 
@@ -22,17 +22,17 @@ from app.schemas.auth import (
     UserLogin, RefreshTokenRequest, TokenResponse, UserInfo,
     UserCreate, UserUpdate, PasswordChange, User
 )
-from models import User as UserModel
+from models.auth import User as UserModel
 
 
 router = APIRouter()
 
 
-@router.post("/login", response_model=TokenResponse)
-async def login(
+@router.post("/login")  # TODO: response_model=TokenResponse
+def login(
     user_credentials: UserLogin,
-    session: AsyncSession = Depends(get_db),
-    redis_client: redis.Redis = Depends(get_redis)
+    session: Session = Depends(get_db)
+    # redis_client: redis.Redis = Depends(get_redis)  # Disabled for debugging
 ) -> TokenResponse:
     """
     Authenticate user and return JWT tokens.
@@ -44,13 +44,13 @@ async def login(
     """
     # Find user by username
     query = select(UserModel).where(UserModel.username == user_credentials.username.lower())
-    result = await session.execute(query)
+    result = session.execute(query)
     user = result.scalar_one_or_none()
     
-    if not user or not verify_password(user_credentials.password, user.password_hash):
+    if not user or not verify_password(user_credentials.password, user.hashed_password):
         # Increment failed login attempts
         if user:
-            await session.execute(
+            session.execute(
                 update(UserModel)
                 .where(UserModel.user_id == user.user_id)
                 .values(
@@ -58,7 +58,7 @@ async def login(
                     last_failed_login=datetime.now()
                 )
             )
-            await session.commit()
+            session.commit()
         
         raise AuthenticationError("Invalid username or password")
     
@@ -67,25 +67,25 @@ async def login(
         raise AuthenticationError("User account is disabled")
     
     # Check if account is locked
-    if (user.account_locked_until and 
-        user.account_locked_until > datetime.now()):
+    if (user.locked_until and 
+        user.locked_until > datetime.now()):
         raise AuthenticationError("Account is locked. Try again later.")
     
     # Check failed login attempts
     if user.failed_login_attempts >= 5:
         # Lock account for 30 minutes
         lock_until = datetime.now() + timedelta(minutes=30)
-        await session.execute(
+        session.execute(
             update(UserModel)
             .where(UserModel.user_id == user.user_id)
-            .values(account_locked_until=lock_until)
+            .values(locked_until=lock_until)
         )
-        await session.commit()
+        session.commit()
         raise AuthenticationError("Account locked due to too many failed attempts")
     
     # Create tokens
     token_data = {
-        "sub": user.user_id,
+        "sub": str(user.user_id),
         "username": user.username,
         "role": user.role
     }
@@ -94,24 +94,25 @@ async def login(
     refresh_token = create_refresh_token(token_data)
     
     # Update last login and reset failed attempts
-    await session.execute(
+    session.execute(
         update(UserModel)
         .where(UserModel.user_id == user.user_id)
         .values(
             last_login=datetime.now(),
             failed_login_attempts=0,
-            account_locked_until=None
+            locked_until=None
         )
     )
-    await session.commit()
+    session.commit()
     
     # Store refresh token in Redis for revocation tracking
-    if redis_client:
-        await redis_client.set(
-            f"refresh_token:{user.user_id}",
-            refresh_token,
-            ex=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
-        )
+    # TODO: Re-enable Redis when available
+    # if redis_client:
+    #     await redis_client.set(
+    #         f"refresh_token:{user.user_id}",
+    #         refresh_token,
+    #         ex=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
+    #     )
     
     # Create user info
     user_info = UserInfo.from_orm(user)
@@ -124,11 +125,11 @@ async def login(
     )
 
 
-@router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(
+@router.post("/refresh")  # TODO: response_model=TokenResponse
+def refresh_token(
     refresh_request: RefreshTokenRequest,
-    session: AsyncSession = Depends(get_db),
-    redis_client: redis.Redis = Depends(get_redis)
+    session: Session = Depends(get_db),
+    # redis_client: redis.Redis = Depends(get_redis)  # Disabled for debugging
 ) -> TokenResponse:
     """
     Refresh access token using refresh token.
@@ -138,22 +139,23 @@ async def refresh_token(
     Returns new access token with same expiration.
     """
     # Verify refresh token
-    token_data = await verify_token(refresh_request.refresh_token, "refresh")
+    token_data = verify_token(refresh_request.refresh_token, "refresh")
     
     # Check if refresh token is in Redis (not revoked)
-    if redis_client:
-        stored_token = await redis_client.get(f"refresh_token:{token_data.user_id}")
-        if not stored_token or stored_token.decode() != refresh_request.refresh_token:
-            raise AuthenticationError("Invalid or revoked refresh token")
+    # TODO: Re-enable Redis when available
+    # if redis_client:
+    #     stored_token = await redis_client.get(f"refresh_token:{token_data.user_id}")
+    #     if not stored_token or stored_token.decode() != refresh_request.refresh_token:
+    #         raise AuthenticationError("Invalid or revoked refresh token")
     
     # Get user from database
-    user = await session.get(UserModel, token_data.user_id)
+    user = session.get(UserModel, token_data.user_id)
     if not user or not user.is_active:
         raise AuthenticationError("User not found or inactive")
     
     # Create new access token
     new_token_data = {
-        "sub": user.user_id,
+        "sub": str(user.user_id),
         "username": user.username,
         "role": user.role
     }
@@ -172,10 +174,10 @@ async def refresh_token(
 
 
 @router.post("/logout")
-async def logout(
+def logout(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     current_user: UserInfo = Depends(get_current_user),
-    redis_client: redis.Redis = Depends(get_redis)
+    # redis_client: redis.Redis = Depends(get_redis)  # Disabled for debugging
 ) -> dict[str, Any]:
     """
     Logout user and revoke tokens.
@@ -186,30 +188,30 @@ async def logout(
         raise AuthenticationError("No token provided")
     
     # Blacklist access token
-    if redis_client:
-        # Calculate remaining time until token expiry
-        try:
-            import jwt
-            payload = jwt.decode(
-                credentials.credentials, 
-                settings.SECRET_KEY, 
-                algorithms=[settings.ALGORITHM],
-                options={"verify_exp": False}
-            )
-            exp = payload.get("exp")
-            if exp:
-                remaining_time = exp - int(datetime.now().timestamp())
-                if remaining_time > 0:
-                    await redis_client.set(
-                        f"blacklist:{credentials.credentials}",
-                        "revoked",
-                        ex=remaining_time
-                    )
-        except Exception:
-            pass  # If token parsing fails, we still continue with logout
-        
-        # Remove refresh token
-        await redis_client.delete(f"refresh_token:{current_user.user_id}")
+    # TODO: Re-enable Redis blacklisting for production
+    # if redis_client:
+    #     # Calculate remaining time until token expiry
+    #     try:
+    #         import jwt
+    #         payload = jwt.decode(
+    #             credentials.credentials, 
+    #             settings.SECRET_KEY, 
+    #             algorithms=[settings.ALGORITHM],
+    #             options={"verify_exp": False}
+    #         )
+    #         exp = payload.get("exp")
+    #         if exp:
+    #             remaining_time = exp - int(datetime.now().timestamp())
+    #             if remaining_time > 0:
+    #                 await redis_client.set(
+    #                     f"blacklist:{credentials.credentials}",
+    #                     "revoked",
+    #                     ex=remaining_time
+    #                 )
+    #         # Remove refresh token
+    #         await redis_client.delete(f"refresh_token:{current_user.user_id}")
+    #     except Exception:
+    #         pass  # If token parsing fails, we still continue with logout
     
     return {
         "status": "success",
@@ -218,8 +220,8 @@ async def logout(
     }
 
 
-@router.get("/me", response_model=UserInfo)
-async def get_current_user_info(
+@router.get("/me")  # TODO: response_model=UserInfo
+def get_current_user_info(
     current_user: UserInfo = Depends(get_current_active_user)
 ) -> UserInfo:
     """
@@ -230,11 +232,11 @@ async def get_current_user_info(
     return current_user
 
 
-@router.put("/me", response_model=UserInfo)
-async def update_current_user(
+@router.put("/me")  # TODO: response_model=UserInfo
+def update_current_user(
     user_update: UserUpdate,
     current_user: UserInfo = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db)
+    session: Session = Depends(get_db)
 ) -> UserInfo:
     """
     Update current user information.
@@ -246,7 +248,7 @@ async def update_current_user(
     Role changes require admin privileges.
     """
     # Get user from database
-    user = await session.get(UserModel, current_user.user_id)
+    user = session.get(UserModel, current_user.user_id)
     if not user:
         raise NotFoundError("User", current_user.user_id)
     
@@ -260,17 +262,17 @@ async def update_current_user(
     # This endpoint doesn't allow those changes for security
     
     user.updated_at = datetime.now()
-    await session.commit()
-    await session.refresh(user)
+    session.commit()
+    session.refresh(user)
     
     return UserInfo.from_orm(user)
 
 
 @router.post("/change-password")
-async def change_password(
+def change_password(
     password_change: PasswordChange,
     current_user: UserInfo = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db)
+    session: Session = Depends(get_db)
 ) -> dict[str, Any]:
     """
     Change user password.
@@ -280,20 +282,20 @@ async def change_password(
     - **confirm_password**: Password confirmation
     """
     # Get user from database
-    user = await session.get(UserModel, current_user.user_id)
+    user = session.get(UserModel, current_user.user_id)
     if not user:
         raise NotFoundError("User", current_user.user_id)
     
     # Verify current password
-    if not verify_password(password_change.current_password, user.password_hash):
+    if not verify_password(password_change.current_password, user.hashed_password):
         raise AuthenticationError("Current password is incorrect")
     
     # Update password
-    user.password_hash = get_password_hash(password_change.new_password)
+    user.hashed_password = get_password_hash(password_change.new_password)
     user.password_changed_at = datetime.now()
     user.updated_at = datetime.now()
     
-    await session.commit()
+    session.commit()
     
     return {
         "status": "success",
@@ -303,11 +305,11 @@ async def change_password(
 
 
 # Admin-only endpoints for user management
-@router.post("/users", response_model=User)
-async def create_user(
+@router.post("/users")  # TODO: response_model=User
+def create_user(
     user_create: UserCreate,
     current_user: UserInfo = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db)
+    session: Session = Depends(get_db)
 ) -> User:
     """
     Create new user (Admin only).
@@ -328,7 +330,7 @@ async def create_user(
     
     # Check if username already exists
     query = select(UserModel).where(UserModel.username == user_create.username.lower())
-    result = await session.execute(query)
+    result = session.execute(query)
     existing_user = result.scalar_one_or_none()
     
     if existing_user:
@@ -339,7 +341,7 @@ async def create_user(
         username=user_create.username.lower(),
         full_name=user_create.full_name,
         email=user_create.email.lower() if user_create.email else None,
-        password_hash=get_password_hash(user_create.password),
+        hashed_password=get_password_hash(user_create.password),
         role=user_create.role,
         is_active=user_create.is_active,
         created_at=datetime.now(),
@@ -347,16 +349,16 @@ async def create_user(
     )
     
     session.add(new_user)
-    await session.commit()
-    await session.refresh(new_user)
+    session.commit()
+    session.refresh(new_user)
     
     return User.from_orm(new_user)
 
 
-@router.get("/users", response_model=list[User])
-async def list_users(
+@router.get("/users")  # TODO: response_model=list[User])
+def list_users(
     current_user: UserInfo = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db),
+    session: Session = Depends(get_db),
     skip: int = 0,
     limit: int = 100
 ) -> list[User]:
@@ -373,18 +375,18 @@ async def list_users(
         )
     
     query = select(UserModel).offset(skip).limit(limit).order_by(UserModel.username)
-    result = await session.execute(query)
+    result = session.execute(query)
     users = result.scalars().all()
     
     return [User.from_orm(user) for user in users]
 
 
-@router.put("/users/{user_id}", response_model=User)
-async def update_user(
+@router.put("/users/{user_id}")  # TODO: response_model=User
+def update_user(
     user_id: int,
     user_update: UserUpdate,
     current_user: UserInfo = Depends(get_current_active_user),
-    session: AsyncSession = Depends(get_db)
+    session: Session = Depends(get_db)
 ) -> User:
     """
     Update user (Admin only).
@@ -402,7 +404,7 @@ async def update_user(
         )
     
     # Get user from database
-    user = await session.get(UserModel, user_id)
+    user = session.get(UserModel, user_id)
     if not user:
         raise NotFoundError("User", user_id)
     
@@ -417,7 +419,7 @@ async def update_user(
         user.is_active = user_update.is_active
     
     user.updated_at = datetime.now()
-    await session.commit()
-    await session.refresh(user)
+    session.commit()
+    session.refresh(user)
     
     return User.from_orm(user)

@@ -5,7 +5,7 @@ Provides shared functionality for all service classes.
 
 from typing import Any, Dict, List, Optional, Type, TypeVar, Generic
 from decimal import Decimal
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from sqlalchemy import select, and_, or_, func
 from sqlalchemy.orm import selectinload
 
@@ -22,9 +22,9 @@ class BaseService(Generic[T]):
     def __init__(self, model: Type[T]):
         self.model = model
     
-    async def get_by_id(
+    def get_by_id(
         self,
-        session: AsyncSession,
+        session: Session,
         id_value: int,
         load_relationships: Optional[List[str]] = None
     ) -> T:
@@ -60,7 +60,7 @@ class BaseService(Generic[T]):
             raise ValueError(f"No primary key found for {self.model.__name__}")
         
         query = query.where(pk_column == id_value)
-        result = await session.execute(query)
+        result = session.execute(query)
         entity = result.scalar_one_or_none()
         
         if entity is None:
@@ -68,9 +68,9 @@ class BaseService(Generic[T]):
         
         return entity
     
-    async def list_with_filters(
+    def list_with_filters(
         self,
-        session: AsyncSession,
+        session: Session,
         pagination: PaginationParams,
         filters: Optional[FilterParams] = None,
         additional_filters: Optional[List[Any]] = None,
@@ -137,17 +137,17 @@ class BaseService(Generic[T]):
         query = query.offset(pagination.offset).limit(pagination.page_size)
         
         # Execute queries
-        result = await session.execute(query)
+        result = session.execute(query)
         entities = result.scalars().all()
         
-        count_result = await session.execute(count_query)
+        count_result = session.execute(count_query)
         total_count = count_result.scalar()
         
         return list(entities), total_count
     
-    async def create(
+    def create(
         self,
-        session: AsyncSession,
+        session: Session,
         entity_data: Dict[str, Any],
         user_id: Optional[int] = None
     ) -> T:
@@ -170,13 +170,13 @@ class BaseService(Generic[T]):
         
         entity = self.model(**entity_data)
         session.add(entity)
-        await session.flush()  # Get ID without committing
-        await session.refresh(entity)
+        session.flush()  # Get ID without committing
+        session.refresh(entity)
         return entity
     
-    async def update(
+    def update(
         self,
-        session: AsyncSession,
+        session: Session,
         id_value: int,
         update_data: Dict[str, Any],
         user_id: Optional[int] = None
@@ -193,7 +193,7 @@ class BaseService(Generic[T]):
         Returns:
             Updated entity
         """
-        entity = await self.get_by_id(session, id_value)
+        entity = self.get_by_id(session, id_value)
         
         # Update fields
         for key, value in update_data.items():
@@ -204,13 +204,13 @@ class BaseService(Generic[T]):
         if hasattr(entity, 'updated_by') and user_id:
             entity.updated_by = user_id
         
-        await session.flush()
-        await session.refresh(entity)
+        session.flush()
+        session.refresh(entity)
         return entity
     
-    async def delete(
+    def delete(
         self,
-        session: AsyncSession,
+        session: Session,
         id_value: int,
         soft_delete: bool = True,
         user_id: Optional[int] = None
@@ -227,17 +227,17 @@ class BaseService(Generic[T]):
         Returns:
             True if deleted successfully
         """
-        entity = await self.get_by_id(session, id_value)
+        entity = self.get_by_id(session, id_value)
         
         if soft_delete and hasattr(entity, 'is_active'):
             # Soft delete
             entity.is_active = False
             if hasattr(entity, 'updated_by') and user_id:
                 entity.updated_by = user_id
-            await session.flush()
+            session.flush()
         else:
             # Hard delete
-            await session.delete(entity)
+            session.delete(entity)
         
         return True
     
@@ -329,21 +329,21 @@ class BaseService(Generic[T]):
 class AuditableService(BaseService[T]):
     """Service for auditable entities with created_by/updated_by fields."""
     
-    async def create_with_audit(
+    def create_with_audit(
         self,
-        session: AsyncSession,
+        session: Session,
         entity_data: Dict[str, Any],
         user_id: int
     ) -> T:
         """Create entity with automatic audit trail."""
-        return await self.create(session, entity_data, user_id)
+        return self.create(session, entity_data, user_id)
     
-    async def update_with_audit(
+    def update_with_audit(
         self,
-        session: AsyncSession,
+        session: Session,
         id_value: int,
         update_data: Dict[str, Any],
         user_id: int
     ) -> T:
         """Update entity with automatic audit trail."""
-        return await self.update(session, id_value, update_data, user_id)
+        return self.update(session, id_value, update_data, user_id)

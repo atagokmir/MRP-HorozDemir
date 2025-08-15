@@ -48,6 +48,9 @@ from .base import (
     QuantityColumn
 )
 
+# Import authentication models
+from .auth import User
+
 # Import master data models
 from .master_data import (
     Warehouse,
@@ -90,6 +93,9 @@ from .reporting import (
 
 # Model registry for easy access
 MODEL_REGISTRY = {
+    # Authentication
+    'user': User,
+    
     # Master Data
     'warehouse': Warehouse,
     'product': Product,
@@ -135,6 +141,9 @@ __all__ = [
     'RatingColumn',
     'CurrencyColumn',
     'QuantityColumn',
+    
+    # Authentication Models
+    'User',
     
     # Master Data Models
     'Warehouse',

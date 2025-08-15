@@ -16,7 +16,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 # Import all models to ensure they are registered with the Base metadata
-from .models import Base, set_session_user
+from models import Base, set_session_user
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,11 +27,9 @@ class DatabaseConfig:
     """Database configuration settings"""
     
     def __init__(self):
-        # Default PostgreSQL configuration
-        self.database_url = os.getenv(
-            'DATABASE_URL', 
-            'postgresql://mrp_user:mrp_password@localhost:5432/horoz_demir_mrp'
-        )
+        # Database configuration from app settings
+        from app.config import settings
+        self.database_url = settings.DATABASE_URL
         
         # Connection pool settings
         self.pool_size = int(os.getenv('DB_POOL_SIZE', '10'))
@@ -76,20 +74,30 @@ def create_database_engine(database_url: Optional[str] = None) -> Engine:
         'future': True,  # Use SQLAlchemy 2.0 style
     }
     
-    # Add additional production settings
-    if config.is_production:
+    # Add database-specific connection args
+    if url.startswith('postgresql'):
+        # PostgreSQL-specific settings
+        if config.is_production:
+            engine_kwargs.update({
+                'connect_args': {
+                    'connect_timeout': config.query_timeout,
+                    'application_name': 'horoz_demir_mrp',
+                    'options': '-c statement_timeout=30000'  # 30 second statement timeout
+                }
+            })
+        else:
+            engine_kwargs.update({
+                'connect_args': {
+                    'connect_timeout': config.query_timeout,
+                    'application_name': 'horoz_demir_mrp_dev'
+                }
+            })
+    elif url.startswith('sqlite'):
+        # SQLite-specific settings
         engine_kwargs.update({
             'connect_args': {
-                'connect_timeout': config.query_timeout,
-                'application_name': 'horoz_demir_mrp',
-                'options': '-c statement_timeout=30000'  # 30 second statement timeout
-            }
-        })
-    else:
-        engine_kwargs.update({
-            'connect_args': {
-                'connect_timeout': config.query_timeout,
-                'application_name': 'horoz_demir_mrp_dev'
+                'check_same_thread': False,  # Allow SQLite to be used across threads
+                'timeout': config.query_timeout
             }
         })
     
@@ -106,23 +114,35 @@ def configure_engine_events(engine: Engine):
     """Configure database engine event listeners for optimization and monitoring."""
     
     @event.listens_for(engine, "connect")
-    def set_postgresql_search_path(dbapi_connection, connection_record):
-        """Set PostgreSQL search path and other session variables"""
-        with dbapi_connection.cursor() as cursor:
-            # Set search path
-            cursor.execute("SET search_path TO public")
-            
-            # Set timezone
-            cursor.execute("SET timezone TO 'UTC'")
-            
-            # Set statement timeout for safety
-            if config.is_production:
-                cursor.execute("SET statement_timeout = '30s'")
-            
-            # Enable parallel queries for better performance
-            cursor.execute("SET max_parallel_workers_per_gather = 2")
-            
-            logger.debug("Configured PostgreSQL session settings")
+    def set_database_session_config(dbapi_connection, connection_record):
+        """Set database-specific session configuration"""
+        if engine.url.drivername.startswith('postgresql'):
+            # PostgreSQL-specific configuration
+            with dbapi_connection.cursor() as cursor:
+                # Set search path
+                cursor.execute("SET search_path TO public")
+                
+                # Set timezone
+                cursor.execute("SET timezone TO 'UTC'")
+                
+                # Set statement timeout for safety
+                if config.is_production:
+                    cursor.execute("SET statement_timeout = '30s'")
+                
+                # Enable parallel queries for better performance
+                cursor.execute("SET max_parallel_workers_per_gather = 2")
+                
+                logger.debug("Configured PostgreSQL session settings")
+        elif engine.url.drivername.startswith('sqlite'):
+            # SQLite-specific configuration
+            with dbapi_connection:
+                # Enable foreign key constraints
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.close()
+                
+                logger.debug("Configured SQLite session settings")
     
     @event.listens_for(engine, "before_cursor_execute")
     def log_slow_queries(conn, cursor, statement, parameters, context, executemany):
@@ -277,7 +297,7 @@ def insert_essential_data(engine: Optional[Engine] = None):
     
     with database_session('SYSTEM') as session:
         # Import models locally to avoid circular imports
-        from .models import Warehouse
+        from models import Warehouse
         
         # Check if warehouses already exist
         existing_warehouses = session.query(Warehouse).count()
@@ -412,7 +432,7 @@ def health_check() -> dict:
         if connection_ok:
             # Check essential data
             with database_session() as session:
-                from .models import Warehouse
+                from models import Warehouse
                 warehouse_count = session.query(Warehouse).count()
                 health_status['essential_data_present'] = warehouse_count >= 4
         

@@ -5,7 +5,7 @@ Handles production order lifecycle, component allocation, and completion process
 
 from typing import List, Optional
 from fastapi import APIRouter, Depends, Query, Path
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.dependencies import (
     get_db, get_current_active_user, require_permissions,
@@ -36,14 +36,14 @@ class ProductionComponentList:
     pass
 
 
-@router.get("/orders", response_model=PaginatedResponse[ProductionOrder])
-async def list_production_orders(
+@router.get("/orders")  # TODO: response_model=PaginatedResponse[ProductionOrder])
+def list_production_orders(
     pagination: PaginationParams = Depends(get_pagination_params),
     status: Optional[str] = Query(None, description="Filter by status"),
     product_id: Optional[int] = Query(None, description="Filter by product ID"),
     priority: Optional[int] = Query(None, description="Filter by priority"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("read:production"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("read:production")
 ):
     """
     List production orders with status filtering.
@@ -64,22 +64,22 @@ async def list_production_orders(
     )
 
 
-@router.get("/orders/{order_id}", response_model=ProductionOrder)
-async def get_production_order(
+@router.get("/orders/{order_id}")  # TODO: # response_model=ProductionOrder
+def get_production_order(
     order_id: int = Path(..., description="Production order ID"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("read:production"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("read:production")
 ):
     """Get production order by ID with full details."""
     # TODO: Implement production order retrieval
     raise NotFoundError("Production Order", order_id)
 
 
-@router.post("/orders", response_model=IDResponse)
-async def create_production_order(
-    order_request: ProductionOrderRequest,
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("write:production"))
+@router.post("/orders")  # TODO: response_model=IDResponse)
+def create_production_order(
+    # order_request: ProductionOrderRequest,  # TODO: Implement proper schema
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("write:production")
 ):
     """
     Create new production order.
@@ -90,12 +90,12 @@ async def create_production_order(
     return IDResponse(id=1, message="Production order created successfully")
 
 
-@router.put("/orders/{order_id}/status", response_model=ProductionOrder)
-async def update_production_order_status(
+@router.put("/orders/{order_id}/status")  # TODO: response_model=ProductionOrder
+def update_production_order_status(
     order_id: int = Path(..., description="Production order ID"),
     status: str = Query(..., description="New status"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("write:production"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("write:production")
 ):
     """
     Update production order status.
@@ -106,11 +106,11 @@ async def update_production_order_status(
     raise NotFoundError("Production Order", order_id)
 
 
-@router.get("/orders/{order_id}/components", response_model=ProductionComponentList)
-async def get_production_order_components(
+@router.get("/orders/{order_id}/components")  # TODO: response_model=ProductionComponentList)
+def get_production_order_components(
     order_id: int = Path(..., description="Production order ID"),
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("read:production"))
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("read:production")
 ):
     """
     Get component requirements and allocations for production order.
@@ -121,12 +121,12 @@ async def get_production_order_components(
     return ProductionComponentList(components=[], order_id=order_id)
 
 
-@router.post("/orders/{order_id}/complete", response_model=ProductionOrder)
-async def complete_production_order(
+@router.post("/orders/{order_id}/complete")  # TODO: response_model=ProductionOrder
+def complete_production_order(
     order_id: int = Path(..., description="Production order ID"),
-    completion_data: ProductionCompletion = ...,
-    session: AsyncSession = Depends(get_db),
-    current_user: UserInfo = Depends(require_permissions("approve:production"))
+    # completion_data: ProductionCompletion = ...,  # TODO: Implement proper schema
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("approve:production")
 ):
     """
     Complete production order.

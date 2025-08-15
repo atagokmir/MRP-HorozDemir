@@ -44,7 +44,7 @@ class ProductionOrder(BaseModel, AuditMixin):
             "actual_completion_date >= actual_start_date)",
             name='chk_production_order_dates'
         ),
-        CheckConstraint("order_number ~ '^PO[0-9]{6}$'", name='chk_production_order_number_format'),
+        # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
         # Performance indexes
         Index('idx_production_orders_status', 'status', 'planned_start_date'),
         Index('idx_production_orders_product', 'product_id', 'order_date'),

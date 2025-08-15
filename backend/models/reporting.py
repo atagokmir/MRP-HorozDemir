@@ -46,8 +46,8 @@ class CriticalStockAlert(BaseModel):
         Index('idx_critical_stock_alerts_product_warehouse', 'product_id', 'warehouse_id'),
         Index('idx_critical_stock_alerts_unresolved', 'alert_type', 'is_resolved', 'alert_date',
               postgresql_where='is_resolved = FALSE'),
-        Index('idx_critical_stock_alerts_date', 'alert_date DESC'),
-        Index('idx_critical_stock_alerts_resolution', 'resolved_date DESC',
+        Index('idx_critical_stock_alerts_date', 'alert_date'),
+        Index('idx_critical_stock_alerts_resolution', 'resolved_date',
               postgresql_where='is_resolved = TRUE'),
     )
     
@@ -85,18 +85,24 @@ class CriticalStockAlert(BaseModel):
             raise ValueError(f"alert_type must be one of: {valid_types}")
         return alert_type
     
-    @validates('current_stock', 'minimum_level', 'critical_level')
+    @validates('current_stock', 'minimum_level')
     def validate_stock_levels(self, key, value):
         if value is not None and value < 0:
             raise ValueError(f"{key} must be non-negative")
         return value
     
     @validates('critical_level')
-    def validate_critical_vs_minimum(self, key, critical_level):
+    def validate_critical_level(self, key, critical_level):
+        # Check for non-negative value
+        if critical_level is not None and critical_level < 0:
+            raise ValueError("critical_level must be non-negative")
+        
+        # Check critical doesn't exceed minimum
         if (critical_level is not None and 
             self.minimum_level is not None and 
             critical_level > self.minimum_level):
             raise ValueError("critical_level cannot exceed minimum_level")
+        
         return critical_level
     
     @validates('resolved_date')
@@ -178,10 +184,10 @@ class CostCalculationHistory(BaseModel):
             name='uk_cost_calculation'
         ),
         # Performance indexes
-        Index('idx_cost_calculation_history_product_date', 'product_id', 'calculation_date DESC'),
-        Index('idx_cost_calculation_history_type_date', 'cost_type', 'calculation_date DESC'),
+        Index('idx_cost_calculation_history_product_date', 'product_id', 'calculation_date'),
+        Index('idx_cost_calculation_history_type_date', 'cost_type', 'calculation_date'),
         Index('idx_cost_calculation_history_source', 'source_type', 'source_id'),
-        Index('idx_cost_trend_analysis', 'product_id', 'calculation_date DESC', 'cost_type'),
+        Index('idx_cost_trend_analysis', 'product_id', 'calculation_date', 'cost_type'),
     )
     
     cost_history_id = Column(Integer, primary_key=True)

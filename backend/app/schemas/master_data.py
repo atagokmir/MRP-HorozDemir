@@ -9,19 +9,23 @@ from typing import Optional, List
 from pydantic import Field, validator
 from app.schemas.base import (
     BaseSchema, TimestampMixin, ProductType, WarehouseType,
-    ProductCode, WarehouseCode, validate_non_negative_decimal
+    validate_product_code, validate_warehouse_code, validate_non_negative_decimal
 )
 
 
 # Warehouse schemas
 class WarehouseBase(BaseSchema):
     """Base warehouse schema."""
-    warehouse_code: WarehouseCode = Field(..., description="Unique warehouse code")
+    warehouse_code: str = Field(..., description="Unique warehouse code")
     warehouse_name: str = Field(..., min_length=1, max_length=100, description="Warehouse name")
     warehouse_type: WarehouseType = Field(..., description="Type of warehouse")
     location: Optional[str] = Field(None, max_length=200, description="Warehouse location/address")
     manager_name: Optional[str] = Field(None, max_length=100, description="Warehouse manager name")
     description: Optional[str] = Field(None, max_length=500, description="Additional description")
+    
+    @validator('warehouse_code')
+    def validate_warehouse_code_field(cls, v):
+        return validate_warehouse_code(v)
 
 
 class WarehouseCreate(WarehouseBase):
@@ -54,19 +58,29 @@ class WarehouseList(BaseSchema):
 # Product schemas
 class ProductBase(BaseSchema):
     """Base product schema."""
-    product_code: ProductCode = Field(..., description="Unique product code")
+    product_code: str = Field(..., description="Unique product code")
     product_name: str = Field(..., min_length=1, max_length=200, description="Product name")
     product_type: ProductType = Field(..., description="Type of product")
     unit_of_measure: str = Field(..., max_length=10, description="Unit of measurement (kg, pcs, etc.)")
-    standard_cost: Optional[Decimal] = Field(None, ge=0, decimal_places=4, description="Standard cost per unit")
-    critical_stock_level: Optional[Decimal] = Field(None, ge=0, decimal_places=3, description="Critical stock level")
+    standard_cost: Optional[Decimal] = Field(None, ge=0, description="Standard cost per unit")
+    minimum_stock_level: Optional[Decimal] = Field(None, ge=0, description="Minimum stock level")
+    critical_stock_level: Optional[Decimal] = Field(None, ge=0, description="Critical stock level")
     description: Optional[str] = Field(None, max_length=1000, description="Product description")
     specifications: Optional[str] = Field(None, max_length=2000, description="Technical specifications")
+    
+    @validator('product_code')
+    def validate_product_code_field(cls, v):
+        return validate_product_code(v)
     
     @validator('standard_cost')
     def validate_standard_cost(cls, v):
         """Validate standard cost."""
         return validate_non_negative_decimal(v, "Standard cost")
+    
+    @validator('minimum_stock_level')
+    def validate_minimum_stock_level(cls, v):
+        """Validate minimum stock level."""
+        return validate_non_negative_decimal(v, "Minimum stock level")
     
     @validator('critical_stock_level')
     def validate_critical_stock_level(cls, v):
@@ -84,8 +98,8 @@ class ProductUpdate(BaseSchema):
     product_name: Optional[str] = Field(None, min_length=1, max_length=200)
     product_type: Optional[ProductType] = None
     unit_of_measure: Optional[str] = Field(None, max_length=10)
-    standard_cost: Optional[Decimal] = Field(None, ge=0, decimal_places=4)
-    critical_stock_level: Optional[Decimal] = Field(None, ge=0, decimal_places=3)
+    standard_cost: Optional[Decimal] = Field(None, ge=0)
+    critical_stock_level: Optional[Decimal] = Field(None, ge=0)
     description: Optional[str] = Field(None, max_length=1000)
     specifications: Optional[str] = Field(None, max_length=2000)
     is_active: Optional[bool] = None
@@ -201,8 +215,8 @@ class ProductSupplierBase(BaseSchema):
     product_id: int
     supplier_id: int
     supplier_product_code: Optional[str] = Field(None, max_length=50, description="Supplier's product code")
-    unit_price: Optional[Decimal] = Field(None, ge=0, decimal_places=4, description="Unit price from supplier")
-    minimum_order_quantity: Optional[Decimal] = Field(None, ge=0, decimal_places=3, description="Minimum order quantity")
+    unit_price: Optional[Decimal] = Field(None, ge=0, description="Unit price from supplier")
+    minimum_order_quantity: Optional[Decimal] = Field(None, ge=0, description="Minimum order quantity")
     lead_time_days: Optional[int] = Field(None, ge=0, description="Lead time in days")
     is_preferred: bool = Field(False, description="Is this the preferred supplier")
     
@@ -225,8 +239,8 @@ class ProductSupplierCreate(ProductSupplierBase):
 class ProductSupplierUpdate(BaseSchema):
     """Update product-supplier relationship."""
     supplier_product_code: Optional[str] = Field(None, max_length=50)
-    unit_price: Optional[Decimal] = Field(None, ge=0, decimal_places=4)
-    minimum_order_quantity: Optional[Decimal] = Field(None, ge=0, decimal_places=3)
+    unit_price: Optional[Decimal] = Field(None, ge=0)
+    minimum_order_quantity: Optional[Decimal] = Field(None, ge=0)
     lead_time_days: Optional[int] = Field(None, ge=0)
     is_preferred: Optional[bool] = None
     is_active: Optional[bool] = None

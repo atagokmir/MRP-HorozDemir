@@ -122,63 +122,42 @@ class DateRangeFilter(BaseSchema):
         return v
 
 
-# Common field validators
-class ProductCode(str):
-    """Product code validation."""
-    
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-    
-    @classmethod
-    def validate(cls, v):
-        if not v:
-            raise ValueError('Product code is required')
-        if not isinstance(v, str):
-            raise ValueError('Product code must be a string')
-        if not v.replace('-', '').replace('_', '').isalnum():
-            raise ValueError('Product code must contain only alphanumeric characters, hyphens, and underscores')
-        if len(v) < 3 or len(v) > 20:
-            raise ValueError('Product code must be between 3 and 20 characters')
-        return v.upper()
+# Common field validators - simplified for compatibility
+def validate_product_code(v: str) -> str:
+    """Validate product code format."""
+    if not v:
+        raise ValueError('Product code is required')
+    if not isinstance(v, str):
+        raise ValueError('Product code must be a string')
+    if not v.replace('-', '').replace('_', '').isalnum():
+        raise ValueError('Product code must contain only alphanumeric characters, hyphens, and underscores')
+    if len(v) < 3 or len(v) > 20:
+        raise ValueError('Product code must be between 3 and 20 characters')
+    return v.upper()
 
 
-class WarehouseCode(str):
-    """Warehouse code validation."""
-    
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-    
-    @classmethod
-    def validate(cls, v):
-        if not v:
-            raise ValueError('Warehouse code is required')
-        if not isinstance(v, str):
-            raise ValueError('Warehouse code must be a string')
-        if not v.replace('-', '').replace('_', '').isalnum():
-            raise ValueError('Warehouse code must contain only alphanumeric characters, hyphens, and underscores')
-        if len(v) < 2 or len(v) > 10:
-            raise ValueError('Warehouse code must be between 2 and 10 characters')
-        return v.upper()
+def validate_warehouse_code(v: str) -> str:
+    """Validate warehouse code format."""
+    if not v:
+        raise ValueError('Warehouse code is required')
+    if not isinstance(v, str):
+        raise ValueError('Warehouse code must be a string')
+    if not v.replace('-', '').replace('_', '').isalnum():
+        raise ValueError('Warehouse code must contain only alphanumeric characters, hyphens, and underscores')
+    if len(v) < 2 or len(v) > 10:
+        raise ValueError('Warehouse code must be between 2 and 10 characters')
+    return v.upper()
 
 
-class BatchNumber(str):
-    """Batch number validation."""
-    
-    @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
-    
-    @classmethod
-    def validate(cls, v):
-        if not v:
-            raise ValueError('Batch number is required')
-        if not isinstance(v, str):
-            raise ValueError('Batch number must be a string')
-        if len(v) < 3 or len(v) > 50:
-            raise ValueError('Batch number must be between 3 and 50 characters')
-        return v.upper()
+def validate_batch_number(v: str) -> str:
+    """Validate batch number format."""
+    if not v:
+        raise ValueError('Batch number is required')
+    if not isinstance(v, str):
+        raise ValueError('Batch number must be a string')
+    if len(v) < 3 or len(v) > 50:
+        raise ValueError('Batch number must be between 3 and 50 characters')
+    return v.upper()
 
 
 # Common decimal validators

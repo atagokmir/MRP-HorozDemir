@@ -12,8 +12,8 @@ import os
 class Settings(BaseSettings):
     """Application settings with environment variable support."""
     
-    # Database Configuration
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:password@localhost:5432/horoz_demir_mrp"
+    # Database Configuration  
+    DATABASE_URL: str = "sqlite:///./test_mrp.db"
     DB_ECHO: bool = False
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
@@ -69,8 +69,8 @@ class Settings(BaseSettings):
     @validator('DATABASE_URL', pre=True)
     def validate_database_url(cls, v):
         """Validate database URL format."""
-        if not v or not v.startswith(('postgresql://', 'postgresql+asyncpg://')):
-            raise ValueError('DATABASE_URL must be a valid PostgreSQL URL')
+        if not v or not v.startswith(('postgresql://', 'postgresql+asyncpg://', 'sqlite:///')):
+            raise ValueError('DATABASE_URL must be a valid PostgreSQL or SQLite URL')
         return v
     
     @validator('SECRET_KEY', pre=True)
