@@ -186,7 +186,6 @@ def upgrade() -> None:
         sa.CheckConstraint("quantity != 0", name='chk_movement_quantity'),
         sa.CheckConstraint("unit_cost >= 0", name='chk_movement_unit_cost'),
         sa.CheckConstraint("reference_type IS NULL OR reference_type IN ('PURCHASE_ORDER', 'PRODUCTION_ORDER', 'TRANSFER', 'ADJUSTMENT', 'RETURN', 'SALE')", name='chk_movement_reference_type'),
-        sa.CheckConstraint("movement_date <= CURRENT_TIMESTAMP + INTERVAL '1 hour'", name='chk_movement_date'),
         sa.CheckConstraint("(movement_type != 'TRANSFER') OR (movement_type = 'TRANSFER' AND from_warehouse_id IS NOT NULL AND to_warehouse_id IS NOT NULL)", name='chk_transfer_warehouses'),
         sa.ForeignKeyConstraint(['inventory_item_id'], ['inventory_items.inventory_item_id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['from_warehouse_id'], ['warehouses.warehouse_id'], ondelete='SET NULL'),

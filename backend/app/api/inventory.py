@@ -199,15 +199,20 @@ def get_inventory_availability(
     batches = []
     
     for item in inventory_items:
-        total_in_stock += item.quantity_in_stock
-        total_reserved += item.reserved_quantity
-        available_qty = item.quantity_in_stock - item.reserved_quantity
+        # Ensure proper type conversion to Decimal
+        item_quantity = Decimal(str(item.quantity_in_stock or 0))
+        item_reserved = Decimal(str(item.reserved_quantity or 0))
+        item_unit_cost = Decimal(str(item.unit_cost or 0))
+        
+        total_in_stock += item_quantity
+        total_reserved += item_reserved
+        available_qty = item_quantity - item_reserved
         total_available += available_qty
-        total_value += item.quantity_in_stock * item.unit_cost
+        total_value += item_quantity * item_unit_cost
         
         # Check for expired items
         if item.expiry_date and item.expiry_date <= date.today():
-            expired_quantity += item.quantity_in_stock
+            expired_quantity += item_quantity
         
         # Track date range
         if oldest_batch_date is None or item.entry_date < oldest_batch_date:
@@ -221,14 +226,14 @@ def get_inventory_availability(
             product_id=item.product_id,
             warehouse_id=item.warehouse_id,
             batch_number=item.batch_number,
-            quantity_in_stock=item.quantity_in_stock,
-            reserved_quantity=item.reserved_quantity,
-            unit_cost=item.unit_cost,
+            quantity_in_stock=item_quantity,
+            reserved_quantity=item_reserved,
+            unit_cost=item_unit_cost,
             quality_status=item.quality_status,
             expiry_date=item.expiry_date,
             supplier_id=item.supplier_id,
             purchase_order_id=item.purchase_order_id,
-            notes=item.notes,
+            notes=getattr(item, 'notes', None),
             entry_date=item.entry_date,
             created_at=item.created_at,
             updated_at=item.updated_at
@@ -323,7 +328,6 @@ def stock_in_operation(
         supplier_id=stock_in_request.supplier_id,
         purchase_order_id=stock_in_request.purchase_order_id,
         quality_status=stock_in_request.quality_status,
-        notes=stock_in_request.notes,
         created_at=datetime.now(),
         updated_at=datetime.now()
     )
@@ -340,7 +344,7 @@ def stock_in_operation(
         unit_cost=stock_in_request.unit_cost,
         reference_type='PURCHASE_ORDER' if stock_in_request.purchase_order_id else None,
         reference_id=stock_in_request.purchase_order_id,
-        notes=f"Stock in operation - Batch: {stock_in_request.batch_number}",
+        notes=f"Stock in operation - Batch: {stock_in_request.batch_number}" + (f" - {stock_in_request.notes}" if stock_in_request.notes else ""),
         created_by=current_user.username,
         created_at=datetime.now(),
         updated_at=datetime.now()
@@ -402,7 +406,7 @@ def stock_out_operation(
     available_items = result.scalars().all()
     
     # Check if sufficient stock is available
-    total_available = sum(item.quantity_in_stock - item.reserved_quantity for item in available_items)
+    total_available = sum(Decimal(str(item.quantity_in_stock or 0)) - Decimal(str(item.reserved_quantity or 0)) for item in available_items)
     
     if total_available < stock_out_request.quantity:
         raise InsufficientStockError(
@@ -421,7 +425,7 @@ def stock_out_operation(
         if remaining_to_consume <= 0:
             break
         
-        available_in_batch = item.quantity_in_stock - item.reserved_quantity
+        available_in_batch = Decimal(str(item.quantity_in_stock or 0)) - Decimal(str(item.reserved_quantity or 0))
         
         if available_in_batch <= 0:
             continue
@@ -543,7 +547,7 @@ def allocate_stock(
     available_items = result.scalars().all()
     
     # Calculate total available
-    total_available = sum(item.quantity_in_stock - item.reserved_quantity for item in available_items)
+    total_available = sum(Decimal(str(item.quantity_in_stock or 0)) - Decimal(str(item.reserved_quantity or 0)) for item in available_items)
     
     # Perform FIFO allocation
     remaining_to_allocate = allocation_request.quantity
@@ -555,7 +559,7 @@ def allocate_stock(
         if remaining_to_allocate <= 0:
             break
         
-        available_in_batch = item.quantity_in_stock - item.reserved_quantity
+        available_in_batch = Decimal(str(item.quantity_in_stock or 0)) - Decimal(str(item.reserved_quantity or 0))
         
         if available_in_batch <= 0:
             continue

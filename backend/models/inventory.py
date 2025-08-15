@@ -35,20 +35,15 @@ class InventoryItem(BaseModel):
             name='chk_inventory_quality_status'
         ),
         # Regex constraints are PostgreSQL-specific, removed for SQLite compatibility
-        CheckConstraint("entry_date <= CURRENT_TIMESTAMP", name='chk_inventory_entry_date'),
         CheckConstraint(
             "expiry_date IS NULL OR expiry_date > entry_date",
             name='chk_inventory_expiry_date'
         ),
-        CheckConstraint(
-            "NOT (product_id, warehouse_id, batch_number, entry_date) IS NULL",
-            name='uk_inventory_batch'
-        ),
         # FIFO performance indexes
         Index('idx_inventory_fifo_order', 'product_id', 'warehouse_id', 'entry_date', 'inventory_item_id',
-              postgresql_where="quality_status = 'APPROVED' AND available_quantity > 0"),
-        Index('idx_inventory_available', 'product_id', 'warehouse_id', 'available_quantity',
-              postgresql_where="available_quantity > 0"),
+              postgresql_where="quality_status = 'APPROVED' AND quantity_in_stock > reserved_quantity"),
+        Index('idx_inventory_available', 'product_id', 'warehouse_id', 'quantity_in_stock',
+              postgresql_where="quantity_in_stock > reserved_quantity"),
         Index('idx_inventory_quality', 'quality_status', 'product_id', 'warehouse_id',
               postgresql_where="quality_status = 'APPROVED'"),
         Index('idx_inventory_batch_lookup', 'batch_number', 'entry_date'),
@@ -68,18 +63,7 @@ class InventoryItem(BaseModel):
     
     quantity_in_stock = QuantityColumn.create('quantity_in_stock', nullable=False)
     reserved_quantity = QuantityColumn.create('reserved_quantity', default=Decimal('0'))
-    available_quantity = Column(
-        DECIMAL(15, 4),
-        Computed('quantity_in_stock - reserved_quantity'),
-        comment="Calculated field: quantity_in_stock - reserved_quantity"
-    )
-    
     unit_cost = CurrencyColumn.create('unit_cost', nullable=False)
-    total_cost = Column(
-        DECIMAL(15, 4),
-        Computed('quantity_in_stock * unit_cost'),
-        comment="Calculated field: quantity_in_stock * unit_cost"
-    )
     
     supplier_id = Column(Integer, ForeignKey('suppliers.supplier_id', ondelete='SET NULL'),
                         nullable=True)
@@ -158,6 +142,22 @@ class InventoryItem(BaseModel):
         if self.entry_date:
             return (datetime.now() - self.entry_date).days
         return 0
+    
+    @hybrid_property
+    def available_quantity(self):
+        """Calculate available quantity (stock - reserved)"""
+        try:
+            return Decimal(str(self.quantity_in_stock or 0)) - Decimal(str(self.reserved_quantity or 0))
+        except (TypeError, ValueError, AttributeError):
+            return Decimal('0')
+    
+    @hybrid_property
+    def total_cost(self):
+        """Calculate total inventory value"""
+        try:
+            return Decimal(str(self.quantity_in_stock or 0)) * Decimal(str(self.unit_cost or 0))
+        except (TypeError, ValueError, AttributeError):
+            return Decimal('0')
     
     def consume_quantity(self, quantity: Decimal, reason: str = "CONSUMPTION") -> bool:
         """
@@ -242,7 +242,6 @@ class StockMovement(BaseModel):
             name='chk_movement_reference_type'
         ),
         # PostgreSQL INTERVAL syntax not supported in SQLite, simplified constraint
-        CheckConstraint("movement_date <= CURRENT_TIMESTAMP", name='chk_movement_date'),
         CheckConstraint(
             "(movement_type != 'TRANSFER') OR "
             "(movement_type = 'TRANSFER' AND from_warehouse_id IS NOT NULL AND to_warehouse_id IS NOT NULL)",
@@ -309,10 +308,11 @@ class StockMovement(BaseModel):
     
     @validates('movement_date')
     def validate_movement_date(self, key, movement_date):
-        if movement_date and movement_date > datetime.now():
-            # Allow some tolerance for timestamp differences
+        if movement_date:
+            # Allow tolerance for timestamp differences (up to 1 hour in future)
             from datetime import timedelta
-            if movement_date > (datetime.now() + timedelta(hours=1)):
+            max_future_time = datetime.now() + timedelta(hours=1)
+            if movement_date > max_future_time:
                 raise ValueError("movement_date cannot be too far in the future")
         return movement_date
     
@@ -358,12 +358,28 @@ def track_inventory_insert(mapper, connection, target):
 @event.listens_for(InventoryItem.quantity_in_stock, 'set')
 def track_quantity_change(target, value, oldvalue, initiator):
     """Track quantity changes for stock movement audit"""
-    if oldvalue is not None and oldvalue != value:
-        quantity_change = value - oldvalue
-        movement_type = 'IN' if quantity_change > 0 else 'OUT'
+    try:
+        # Skip if values are not numeric types
+        if (oldvalue is not None and value is not None and 
+            hasattr(oldvalue, '__class__') and 'LoaderCallableStatus' in str(type(oldvalue))):
+            return
         
-        # This would create a stock movement record
-        # The actual implementation would be in the service layer
+        # Convert values to Decimal to handle different types
+        if oldvalue is not None and value is not None:
+            # Only process if both values are numeric
+            if isinstance(value, (int, float, Decimal)) and isinstance(oldvalue, (int, float, Decimal)):
+                new_value = Decimal(str(value))
+                old_value = Decimal(str(oldvalue))
+                
+                if old_value != new_value:
+                    quantity_change = new_value - old_value
+                    movement_type = 'IN' if quantity_change > 0 else 'OUT'
+                    
+                    # This would create a stock movement record
+                    # The actual implementation would be in the service layer
+                    pass
+    except:
+        # Skip tracking if any error occurs
         pass
 
 

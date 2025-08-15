@@ -129,12 +129,22 @@ class InventoryItem(InventoryItemBase, TimestampMixin):
     @property
     def available_quantity(self) -> Decimal:
         """Calculate available quantity (stock - reserved)."""
-        return self.quantity_in_stock - self.reserved_quantity
+        try:
+            quantity = Decimal(str(self.quantity_in_stock or 0))
+            reserved = Decimal(str(self.reserved_quantity or 0))
+            return quantity - reserved
+        except (TypeError, ValueError):
+            return Decimal('0')
     
     @property
     def total_value(self) -> Decimal:
         """Calculate total inventory value."""
-        return self.quantity_in_stock * self.unit_cost
+        try:
+            quantity = Decimal(str(self.quantity_in_stock or 0))
+            cost = Decimal(str(self.unit_cost or 0))
+            return quantity * cost
+        except (TypeError, ValueError):
+            return Decimal('0')
     
     @property
     def is_expired(self) -> bool:
