@@ -22,15 +22,15 @@ export interface PaginatedResponse<T> {
 
 // Authentication Types
 export interface User {
-  id: number;
+  user_id: number;
   username: string;
   full_name: string;
+  email: string;
   role: string;
   permissions: string[];
   is_active: boolean;
   last_login?: string;
   created_at: string;
-  updated_at: string;
 }
 
 export interface LoginRequest {
@@ -57,14 +57,20 @@ export type WarehouseType = 'RAW_MATERIALS' | 'SEMI_FINISHED' | 'FINISHED_PRODUC
 export type UnitOfMeasure = 'PIECES' | 'METERS' | 'KILOGRAMS' | 'LITERS' | 'BOXES';
 
 export interface Product {
-  id: number;
-  code: string;
-  name: string;
+  product_id: number;
+  id?: number; // For compatibility
+  product_code: string;
+  code?: string; // For compatibility
+  product_name: string;
+  name?: string; // For compatibility
   description?: string;
-  category: ProductCategory;
+  product_type: ProductCategory;
+  category?: ProductCategory; // For compatibility
   unit_of_measure: UnitOfMeasure;
   minimum_stock_level: number;
   critical_stock_level: number;
+  standard_cost?: number;
+  specifications?: any;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -81,10 +87,14 @@ export interface CreateProductRequest {
 }
 
 export interface Warehouse {
-  id: number;
-  code: string;
-  name: string;
-  type: WarehouseType;
+  warehouse_id: number;
+  id?: number; // For compatibility
+  warehouse_code: string;
+  code?: string; // For compatibility
+  warehouse_name: string;
+  name?: string; // For compatibility
+  warehouse_type: WarehouseType;
+  type?: WarehouseType; // For compatibility
   location?: string;
   is_active: boolean;
   created_at: string;
@@ -129,23 +139,38 @@ export type QualityStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'QUARANTINE';
 export type MovementType = 'IN' | 'OUT' | 'ADJUSTMENT' | 'TRANSFER';
 
 export interface InventoryItem {
-  id: number;
+  inventory_item_id: number;
+  id?: number; // For compatibility
   product_id: number;
   warehouse_id: number;
-  quantity_in_stock: number;
-  reserved_quantity: number;
-  available_quantity: number;
-  unit_cost: number;
-  total_cost: number;
+  quantity_in_stock: string | number;
+  reserved_quantity: string | number;
+  available_quantity?: number; // Calculated
+  unit_cost: string | number;
+  total_cost?: number; // Calculated
   batch_number?: string;
   entry_date: string;
   expiry_date?: string;
   quality_status: QualityStatus;
   supplier_id?: number;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
   
   // Related objects (when included)
-  product?: Product;
-  warehouse?: Warehouse;
+  product?: {
+    product_id: number;
+    product_code: string;
+    product_name: string;
+    product_type: string;
+    unit_of_measure: string;
+  };
+  warehouse?: {
+    warehouse_id: number;
+    warehouse_code: string;
+    warehouse_name: string;
+    warehouse_type: string;
+  };
   supplier?: Supplier;
 }
 

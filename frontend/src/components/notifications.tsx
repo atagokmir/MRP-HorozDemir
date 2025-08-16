@@ -25,24 +25,18 @@ export function NotificationCenter({ className = '' }: NotificationCenterProps) 
   const hasNotifications = criticalCount > 0;
 
   return (
-    <div className={`relative ${className}`}>
+    <div className={`relative inline-block ${className}`}>
       {/* Notification Bell */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="relative p-2 text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 rounded-full"
+        className="relative p-2 text-indigo-200 hover:text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 rounded-full"
+        title={hasNotifications ? `${criticalCount} critical stock alerts` : 'No notifications'}
       >
         <BellIcon className="h-6 w-6" />
         {hasNotifications && (
-          <span className="absolute top-0 right-0 block h-2 w-2 rounded-full bg-red-400 ring-2 ring-white" />
+          <span className="absolute top-0 right-0 block h-3 w-3 rounded-full bg-red-500 ring-2 ring-white" />
         )}
       </button>
-
-      {/* Notification Badge Count */}
-      {hasNotifications && (
-        <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-medium text-white">
-          {criticalCount > 9 ? '9+' : criticalCount}
-        </span>
-      )}
 
       {/* Notification Dropdown */}
       {isOpen && (

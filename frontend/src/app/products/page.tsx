@@ -208,7 +208,7 @@ export default function ProductsPage() {
                 </tr>
               ) : (
                 data?.items?.map((product) => (
-                  <tr key={product.id} className="hover:bg-gray-50">
+                  <tr key={product.product_id || product.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4">
                       <div>
                         <div className="text-sm font-medium text-gray-900">

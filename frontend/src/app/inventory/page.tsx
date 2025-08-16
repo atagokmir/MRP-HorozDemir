@@ -364,7 +364,7 @@ export default function InventoryPage() {
                   const isLowStock = item.available_quantity <= (item.product?.minimum_stock_level || 0);
                   
                   return (
-                    <tr key={item.id} className={`hover:bg-gray-50 ${isCritical ? 'bg-red-50' : ''}`}>
+                    <tr key={item.inventory_item_id || item.id} className={`hover:bg-gray-50 ${isCritical ? 'bg-red-50' : ''}`}>
                       <td className="px-6 py-4">
                         <div className="flex items-center">
                           {isCritical && (

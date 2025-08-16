@@ -72,6 +72,7 @@ class InventoryItem(BaseModel):
     location_in_warehouse = Column(String(50), comment="Physical location within warehouse")
     quality_status = Column(String(20), default='APPROVED',
                            comment="Quality control status: PENDING, APPROVED, REJECTED, QUARANTINE")
+    notes = Column(Text, comment="Additional notes about the inventory item")
     
     # Relationships
     product = relationship("Product", back_populates="inventory_items")

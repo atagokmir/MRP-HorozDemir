@@ -206,7 +206,7 @@ export default function WarehousesPage() {
                 </tr>
               ) : (
                 data?.items?.map((warehouse) => (
-                  <tr key={warehouse.id} className="hover:bg-gray-50">
+                  <tr key={warehouse.warehouse_id || warehouse.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4">
                       <div className="flex items-center">
                         <BuildingStorefrontIcon className="h-8 w-8 text-gray-400 mr-3" />

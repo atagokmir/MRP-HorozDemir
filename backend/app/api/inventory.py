@@ -24,7 +24,7 @@ from app.schemas.inventory import (
     InventoryItemDetail, InventoryItem, FIFOAllocationItem, StockMovementDetail,
     CriticalStockItem, StockOperationResponse
 )
-from app.schemas.master_data import ProductSummary, SupplierSummary
+from app.schemas.master_data import ProductSummary, SupplierSummary, WarehouseSummary
 from app.exceptions import NotFoundError, InsufficientStockError, ValidationError, ConflictError
 from models.inventory import InventoryItem as InventoryItemModel, StockMovement as StockMovementModel
 from models.master_data import Product, Warehouse, Supplier
@@ -328,6 +328,7 @@ def stock_in_operation(
         supplier_id=stock_in_request.supplier_id,
         purchase_order_id=stock_in_request.purchase_order_id,
         quality_status=stock_in_request.quality_status,
+        notes=stock_in_request.notes,
         created_at=datetime.now(),
         updated_at=datetime.now()
     )

@@ -119,26 +119,159 @@ export class APIClient {
       throw new APIError(data, response.status);
     }
 
+    // Backend returns different formats, normalize to frontend expectation
+    if ((data.status === 'success' && !data.data) || (data.items && !data.status)) {
+      // Backend format: { items: [...], pagination: {...}, status: "success" }
+      // OR: { items: [...], total_count: N } (inventory items)
+      // Transform to: { status: "success", data: { items: [...], total: ..., page: ... } }
+      const { items, pagination, total_count, status, message, timestamp, ...rest } = data;
+      
+      if (items) {
+        // Normalize field names for compatibility
+        const normalizedItems = items.map((item: any) => {
+          const normalized = { ...item };
+          
+          // Warehouse field normalization
+          if (item.warehouse_id) {
+            normalized.id = item.warehouse_id;
+            normalized.code = item.warehouse_code;
+            normalized.name = item.warehouse_name;
+            normalized.type = item.warehouse_type;
+          }
+          
+          // Product field normalization
+          if (item.product_id) {
+            normalized.id = item.product_id;
+            normalized.code = item.product_code;
+            normalized.name = item.product_name;
+            normalized.category = item.product_type;
+          }
+          
+          // Inventory item field normalization
+          if (item.inventory_item_id) {
+            normalized.id = item.inventory_item_id;
+            normalized.available_quantity = parseFloat(item.quantity_in_stock) - parseFloat(item.reserved_quantity);
+            normalized.total_cost = parseFloat(item.quantity_in_stock) * parseFloat(item.unit_cost);
+          }
+          
+          return normalized;
+        });
+
+        if (pagination) {
+          // Full pagination response (warehouses, products, etc.)
+          return {
+            status,
+            data: {
+              items: normalizedItems,
+              total: pagination.total_count,
+              page: pagination.page,
+              page_size: pagination.page_size,
+              total_pages: pagination.total_pages,
+              has_next: pagination.has_next,
+              has_previous: pagination.has_previous,
+            },
+            message,
+            timestamp
+          };
+        } else if (total_count !== undefined) {
+          // Simple pagination response (inventory items)
+          return {
+            status: status || 'success',
+            data: {
+              items: normalizedItems,
+              total: total_count,
+              page: 1,
+              page_size: normalizedItems.length,
+              total_pages: 1,
+              has_next: false,
+              has_previous: false,
+            },
+            message: message || 'Data retrieved successfully',
+            timestamp: timestamp || new Date().toISOString()
+          };
+        }
+      } else {
+        // Single item or other response
+        return {
+          status,
+          data: rest,
+          message,
+          timestamp
+        };
+      }
+    }
+
     return data;
   }
 
   // Convenience methods
   async get<T>(endpoint: string, params?: Record<string, any>): Promise<APIResponse<T>> {
-    const url = params ? `${endpoint}?${new URLSearchParams(params).toString()}` : endpoint;
-    return this.request<T>(url);
+    if (params) {
+      // Filter out undefined values to avoid sending "undefined" as string
+      const filteredParams = Object.entries(params)
+        .filter(([_, value]) => value !== undefined && value !== null && value !== '')
+        .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {});
+      
+      const queryString = new URLSearchParams(filteredParams).toString();
+      const url = queryString ? `${endpoint}?${queryString}` : endpoint;
+      return this.request<T>(url);
+    }
+    return this.request<T>(endpoint);
   }
 
   async post<T>(endpoint: string, body?: any): Promise<APIResponse<T>> {
+    // Transform frontend field names to backend field names for creation
+    let transformedBody = body;
+    if (body && endpoint.includes('/master-data/products')) {
+      transformedBody = {
+        product_code: body.code,
+        product_name: body.name,
+        product_type: body.category,
+        unit_of_measure: body.unit_of_measure,
+        minimum_stock_level: body.minimum_stock_level,
+        critical_stock_level: body.critical_stock_level,
+        description: body.description,
+      };
+    } else if (body && endpoint.includes('/master-data/warehouses')) {
+      transformedBody = {
+        warehouse_code: body.code,
+        warehouse_name: body.name,
+        warehouse_type: body.type,
+        location: body.location,
+      };
+    }
+    
     return this.request<T>(endpoint, {
       method: 'POST',
-      body: body ? JSON.stringify(body) : undefined,
+      body: transformedBody ? JSON.stringify(transformedBody) : undefined,
     });
   }
 
   async put<T>(endpoint: string, body?: any): Promise<APIResponse<T>> {
+    // Transform frontend field names to backend field names for updates
+    let transformedBody = body;
+    if (body && endpoint.includes('/master-data/products')) {
+      transformedBody = {
+        product_code: body.code,
+        product_name: body.name,
+        product_type: body.category,
+        unit_of_measure: body.unit_of_measure,
+        minimum_stock_level: body.minimum_stock_level,
+        critical_stock_level: body.critical_stock_level,
+        description: body.description,
+      };
+    } else if (body && endpoint.includes('/master-data/warehouses')) {
+      transformedBody = {
+        warehouse_code: body.code,
+        warehouse_name: body.name,
+        warehouse_type: body.type,
+        location: body.location,
+      };
+    }
+    
     return this.request<T>(endpoint, {
       method: 'PUT',
-      body: body ? JSON.stringify(body) : undefined,
+      body: transformedBody ? JSON.stringify(transformedBody) : undefined,
     });
   }
 
@@ -157,18 +290,36 @@ export class APIClient {
 
   // Auth methods
   async login(username: string, password: string) {
-    const response = await this.post('/auth/login', { username, password });
-    if (response.data) {
-      this.setTokens(response.data.access_token, response.data.refresh_token);
-      if (typeof window !== 'undefined') {
-        // Backend returns user_info, but frontend expects user
-        const userData = response.data.user_info || response.data.user;
-        localStorage.setItem('user', JSON.stringify(userData));
-        // Also update the response to have consistent naming
-        response.data.user = userData;
-      }
+    // Login endpoint returns data directly, not wrapped in APIResponse
+    const url = `${this.baseURL}/auth/login`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new APIError({ status: 'error', message: data.detail || 'Login failed' }, response.status);
     }
-    return response;
+
+    // Store tokens and user data
+    this.setTokens(data.access_token, data.refresh_token);
+    if (typeof window !== 'undefined') {
+      // Backend returns user_info, normalize to user for frontend
+      const userData = data.user_info || data.user;
+      localStorage.setItem('user', JSON.stringify(userData));
+    }
+
+    // Return in expected APIResponse format
+    return {
+      status: 'success' as const,
+      data: {
+        ...data,
+        user: data.user_info || data.user
+      }
+    };
   }
 
   logout() {

@@ -49,6 +49,14 @@ class Warehouse(WarehouseBase, TimestampMixin):
     is_active: bool = True
 
 
+class WarehouseSummary(BaseSchema):
+    """Warehouse summary for dropdowns."""
+    warehouse_id: int
+    warehouse_code: str
+    warehouse_name: str
+    warehouse_type: WarehouseType
+
+
 class WarehouseList(BaseSchema):
     """Warehouse list response."""
     warehouses: List[Warehouse]

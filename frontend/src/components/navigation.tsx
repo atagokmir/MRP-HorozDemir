@@ -35,48 +35,44 @@ export function Navigation() {
 
   return (
     <nav className="bg-indigo-600">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
+      <div className="max-w-none mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-16 w-full">
+          <div className="flex items-center min-w-0">
+            <div className="flex-shrink-0 mr-8">
               <h1 className="text-white text-lg font-bold">Horoz Demir MRP</h1>
             </div>
-            <div className="hidden md:block">
-              <div className="ml-10 flex items-baseline space-x-4">
-                {navigation.map((item) => {
-                  const isActive = pathname.startsWith(item.href);
-                  return (
-                    <Link
-                      key={item.name}
-                      href={item.href}
-                      className={cn(
-                        isActive
-                          ? 'bg-indigo-700 text-white'
-                          : 'text-indigo-200 hover:bg-indigo-500 hover:text-white',
-                        'px-3 py-2 rounded-md text-sm font-medium flex items-center space-x-1'
-                      )}
-                    >
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.name}</span>
-                    </Link>
-                  );
-                })}
-              </div>
+            <div className="hidden md:flex items-baseline space-x-3">
+              {navigation.map((item) => {
+                const isActive = pathname.startsWith(item.href);
+                return (
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    className={cn(
+                      isActive
+                        ? 'bg-indigo-700 text-white'
+                        : 'text-indigo-200 hover:bg-indigo-500 hover:text-white',
+                      'px-2 py-2 rounded-md text-sm font-medium flex items-center space-x-1 whitespace-nowrap'
+                    )}
+                  >
+                    <item.icon className="h-4 w-4" />
+                    <span>{item.name}</span>
+                  </Link>
+                );
+              })}
             </div>
           </div>
-          <div className="hidden md:block">
-            <div className="ml-4 flex items-center md:ml-6 space-x-4">
-              <NotificationCenter />
-              <div className="text-indigo-200 text-sm">
-                Welcome, {user?.full_name}
-              </div>
-              <button
-                onClick={logout}
-                className="text-indigo-200 hover:text-white px-3 py-2 rounded-md text-sm font-medium"
-              >
-                Logout
-              </button>
+          <div className="hidden md:flex items-center space-x-4 flex-shrink-0 ml-4">
+            <NotificationCenter />
+            <div className="text-indigo-200 text-sm whitespace-nowrap">
+              Welcome, {user?.full_name}
             </div>
+            <button
+              onClick={logout}
+              className="text-indigo-200 hover:text-white px-3 py-2 rounded-md text-sm font-medium whitespace-nowrap"
+            >
+              Logout
+            </button>
           </div>
           <div className="-mr-2 flex md:hidden">
             <button
