@@ -161,7 +161,11 @@ export class APIClient {
     if (response.data) {
       this.setTokens(response.data.access_token, response.data.refresh_token);
       if (typeof window !== 'undefined') {
-        localStorage.setItem('user', JSON.stringify(response.data.user));
+        // Backend returns user_info, but frontend expects user
+        const userData = response.data.user_info || response.data.user;
+        localStorage.setItem('user', JSON.stringify(userData));
+        // Also update the response to have consistent naming
+        response.data.user = userData;
       }
     }
     return response;

@@ -36,8 +36,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const login = async (username: string, password: string) => {
     try {
       const response = await apiClient.login(username, password);
-      if (response.data && 'user' in response.data) {
-        setUser(response.data.user);
+      if (response.data) {
+        // Support both user and user_info fields from backend
+        const responseData = response.data as any;
+        const userData = responseData.user || responseData.user_info;
+        if (userData) {
+          setUser(userData);
+        }
       }
     } catch (error) {
       setUser(null);

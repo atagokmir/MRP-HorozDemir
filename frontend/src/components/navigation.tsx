@@ -16,6 +16,7 @@ import {
   TruckIcon,
 } from '@heroicons/react/24/outline';
 import { cn } from '@/lib/utils';
+import { NotificationCenter } from './notifications';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
@@ -64,8 +65,9 @@ export function Navigation() {
             </div>
           </div>
           <div className="hidden md:block">
-            <div className="ml-4 flex items-center md:ml-6">
-              <div className="text-indigo-200 text-sm mr-4">
+            <div className="ml-4 flex items-center md:ml-6 space-x-4">
+              <NotificationCenter />
+              <div className="text-indigo-200 text-sm">
                 Welcome, {user?.full_name}
               </div>
               <button

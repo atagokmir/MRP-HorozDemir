@@ -1,18 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import { useProducts, useCreateProduct, useUpdateProduct, useDeleteProduct } from '@/hooks/use-products';
-import { Product, CreateProductRequest, ProductCategory, UnitOfMeasure } from '@/types/api';
+import { useWarehouses, useCreateWarehouse, useUpdateWarehouse, useDeleteWarehouse } from '@/hooks/use-warehouses';
+import { Warehouse, CreateWarehouseRequest, WarehouseType } from '@/types/api';
 import { formatDate, getCategoryColor, handleAPIError, debounce } from '@/lib/utils';
-import { PlusIcon, PencilIcon, TrashIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, PencilIcon, TrashIcon, MagnifyingGlassIcon, BuildingStorefrontIcon } from '@heroicons/react/24/outline';
 
-type ProductFormData = CreateProductRequest;
+type WarehouseFormData = CreateWarehouseRequest;
 
-export default function ProductsPage() {
+export default function WarehousesPage() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<ProductCategory | ''>('');
+  const [typeFilter, setTypeFilter] = useState<WarehouseType | ''>('');
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [editingWarehouse, setEditingWarehouse] = useState<Warehouse | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
   const debouncedSearch = debounce((value: string) => {
@@ -20,25 +20,22 @@ export default function ProductsPage() {
     setCurrentPage(1);
   }, 300);
 
-  const { data, isLoading, error } = useProducts({
+  const { data, isLoading, error } = useWarehouses({
     page: currentPage,
     page_size: 20,
     search: searchTerm || undefined,
-    category: categoryFilter || undefined,
+    type: typeFilter || undefined,
   });
 
-  const createProduct = useCreateProduct();
-  const updateProduct = useUpdateProduct();
-  const deleteProduct = useDeleteProduct();
+  const createWarehouse = useCreateWarehouse();
+  const updateWarehouse = useUpdateWarehouse();
+  const deleteWarehouse = useDeleteWarehouse();
 
-  const [formData, setFormData] = useState<ProductFormData>({
+  const [formData, setFormData] = useState<WarehouseFormData>({
     code: '',
     name: '',
-    description: '',
-    category: 'RAW_MATERIALS',
-    unit_of_measure: 'PIECES',
-    minimum_stock_level: 0,
-    critical_stock_level: 0,
+    type: 'RAW_MATERIALS',
+    location: '',
   });
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -46,11 +43,8 @@ export default function ProductsPage() {
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
 
-    if (!formData.code.trim()) errors.code = 'Product code is required';
-    if (!formData.name.trim()) errors.name = 'Product name is required';
-    if (formData.critical_stock_level > formData.minimum_stock_level) {
-      errors.critical_stock_level = 'Critical level cannot be higher than minimum level';
-    }
+    if (!formData.code.trim()) errors.code = 'Warehouse code is required';
+    if (!formData.name.trim()) errors.name = 'Warehouse name is required';
 
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
@@ -61,13 +55,13 @@ export default function ProductsPage() {
     if (!validateForm()) return;
 
     try {
-      if (editingProduct) {
-        await updateProduct.mutateAsync({
-          id: editingProduct.id,
+      if (editingWarehouse) {
+        await updateWarehouse.mutateAsync({
+          id: editingWarehouse.id,
           data: formData,
         });
       } else {
-        await createProduct.mutateAsync(formData);
+        await createWarehouse.mutateAsync(formData);
       }
       handleCloseModal();
     } catch (error) {
@@ -75,25 +69,22 @@ export default function ProductsPage() {
     }
   };
 
-  const handleEdit = (product: Product) => {
-    setEditingProduct(product);
+  const handleEdit = (warehouse: Warehouse) => {
+    setEditingWarehouse(warehouse);
     setFormData({
-      code: product.code,
-      name: product.name,
-      description: product.description || '',
-      category: product.category,
-      unit_of_measure: product.unit_of_measure,
-      minimum_stock_level: product.minimum_stock_level,
-      critical_stock_level: product.critical_stock_level,
+      code: warehouse.code,
+      name: warehouse.name,
+      type: warehouse.type,
+      location: warehouse.location || '',
     });
     setFormErrors({});
     setIsModalOpen(true);
   };
 
-  const handleDelete = async (product: Product) => {
-    if (confirm(`Are you sure you want to delete "${product.name}"?`)) {
+  const handleDelete = async (warehouse: Warehouse) => {
+    if (confirm(`Are you sure you want to delete "${warehouse.name}"?`)) {
       try {
-        await deleteProduct.mutateAsync(product.id);
+        await deleteWarehouse.mutateAsync(warehouse.id);
       } catch (error) {
         alert(handleAPIError(error));
       }
@@ -102,17 +93,24 @@ export default function ProductsPage() {
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
-    setEditingProduct(null);
+    setEditingWarehouse(null);
     setFormData({
       code: '',
       name: '',
-      description: '',
-      category: 'RAW_MATERIALS',
-      unit_of_measure: 'PIECES',
-      minimum_stock_level: 0,
-      critical_stock_level: 0,
+      type: 'RAW_MATERIALS',
+      location: '',
     });
     setFormErrors({});
+  };
+
+  const getTypeColor = (type: WarehouseType): string => {
+    const colors = {
+      RAW_MATERIALS: 'bg-blue-100 text-blue-800',
+      SEMI_FINISHED: 'bg-yellow-100 text-yellow-800',
+      FINISHED_PRODUCTS: 'bg-green-100 text-green-800',
+      PACKAGING: 'bg-purple-100 text-purple-800',
+    };
+    return colors[type] || 'bg-gray-100 text-gray-800';
   };
 
   if (error) {
@@ -124,9 +122,9 @@ export default function ProductsPage() {
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Products</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Warehouses</h1>
           <p className="mt-2 text-sm text-gray-700">
-            Manage your product catalog
+            Manage your warehouse locations and storage facilities
           </p>
         </div>
         <button
@@ -134,7 +132,7 @@ export default function ProductsPage() {
           className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
         >
           <PlusIcon className="h-4 w-4 mr-2" />
-          Add Product
+          Add Warehouse
         </button>
       </div>
 
@@ -145,21 +143,21 @@ export default function ProductsPage() {
             <MagnifyingGlassIcon className="h-5 w-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
             <input
               type="text"
-              placeholder="Search products..."
+              placeholder="Search warehouses..."
               className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
               onChange={(e) => debouncedSearch(e.target.value)}
             />
           </div>
         </div>
         <select
-          value={categoryFilter}
+          value={typeFilter}
           onChange={(e) => {
-            setCategoryFilter(e.target.value as ProductCategory | '');
+            setTypeFilter(e.target.value as WarehouseType | '');
             setCurrentPage(1);
           }}
           className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
         >
-          <option value="">All Categories</option>
+          <option value="">All Types</option>
           <option value="RAW_MATERIALS">Raw Materials</option>
           <option value="SEMI_FINISHED">Semi-Finished</option>
           <option value="FINISHED_PRODUCTS">Finished Products</option>
@@ -167,23 +165,23 @@ export default function ProductsPage() {
         </select>
       </div>
 
-      {/* Products Table */}
+      {/* Warehouses Table */}
       <div className="bg-white shadow rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Product
+                  Warehouse
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Category
+                  Type
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Unit
+                  Location
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Stock Levels
+                  Status
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Created
@@ -197,57 +195,60 @@ export default function ProductsPage() {
               {isLoading ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-4 text-center">
-                    <div className="animate-pulse">Loading products...</div>
+                    <div className="animate-pulse">Loading warehouses...</div>
                   </td>
                 </tr>
               ) : data?.items?.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-4 text-center text-gray-500">
-                    No products found
+                    No warehouses found
                   </td>
                 </tr>
               ) : (
-                data?.items?.map((product) => (
-                  <tr key={product.id} className="hover:bg-gray-50">
+                data?.items?.map((warehouse) => (
+                  <tr key={warehouse.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">
-                          {product.name}
-                        </div>
-                        <div className="text-sm text-gray-500">
-                          Code: {product.code}
-                        </div>
-                        {product.description && (
-                          <div className="text-sm text-gray-400 truncate max-w-xs">
-                            {product.description}
+                      <div className="flex items-center">
+                        <BuildingStorefrontIcon className="h-8 w-8 text-gray-400 mr-3" />
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">
+                            {warehouse.name}
                           </div>
-                        )}
+                          <div className="text-sm text-gray-500">
+                            Code: {warehouse.code}
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getCategoryColor(product.category)}`}>
-                        {product.category.replace('_', ' ')}
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getTypeColor(warehouse.type)}`}>
+                        {warehouse.type.replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-900">
-                      {product.unit_of_measure}
+                      {warehouse.location || '-'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      <div>Min: {product.minimum_stock_level}</div>
-                      <div>Critical: {product.critical_stock_level}</div>
+                    <td className="px-6 py-4">
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                        warehouse.is_active 
+                          ? 'bg-green-100 text-green-800' 
+                          : 'bg-red-100 text-red-800'
+                      }`}>
+                        {warehouse.is_active ? 'Active' : 'Inactive'}
+                      </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
-                      {formatDate(product.created_at)}
+                      {formatDate(warehouse.created_at)}
                     </td>
                     <td className="px-6 py-4 text-right text-sm font-medium space-x-2">
                       <button
-                        onClick={() => handleEdit(product)}
+                        onClick={() => handleEdit(warehouse)}
                         className="text-indigo-600 hover:text-indigo-900"
                       >
                         <PencilIcon className="h-4 w-4" />
                       </button>
                       <button
-                        onClick={() => handleDelete(product)}
+                        onClick={() => handleDelete(warehouse)}
                         className="text-red-600 hover:text-red-900"
                       >
                         <TrashIcon className="h-4 w-4" />
@@ -292,11 +293,11 @@ export default function ProductsPage() {
           <div className="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
-                {editingProduct ? 'Edit Product' : 'Add New Product'}
+                {editingWarehouse ? 'Edit Warehouse' : 'Add New Warehouse'}
               </h3>
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Product Code</label>
+                  <label className="block text-sm font-medium text-gray-700">Warehouse Code</label>
                   <input
                     type="text"
                     value={formData.code}
@@ -307,7 +308,7 @@ export default function ProductsPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Product Name</label>
+                  <label className="block text-sm font-medium text-gray-700">Warehouse Name</label>
                   <input
                     type="text"
                     value={formData.name}
@@ -318,71 +319,28 @@ export default function ProductsPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Description</label>
-                  <textarea
-                    value={formData.description}
-                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                    rows={3}
+                  <label className="block text-sm font-medium text-gray-700">Type</label>
+                  <select
+                    value={formData.type}
+                    onChange={(e) => setFormData({ ...formData, type: e.target.value as WarehouseType })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value="RAW_MATERIALS">Raw Materials</option>
+                    <option value="SEMI_FINISHED">Semi-Finished</option>
+                    <option value="FINISHED_PRODUCTS">Finished Products</option>
+                    <option value="PACKAGING">Packaging</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Location</label>
+                  <input
+                    type="text"
+                    value={formData.location}
+                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                    placeholder="Optional address or description"
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                   />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Category</label>
-                    <select
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value as ProductCategory })}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                    >
-                      <option value="RAW_MATERIALS">Raw Materials</option>
-                      <option value="SEMI_FINISHED">Semi-Finished</option>
-                      <option value="FINISHED_PRODUCTS">Finished Products</option>
-                      <option value="PACKAGING">Packaging</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Unit</label>
-                    <select
-                      value={formData.unit_of_measure}
-                      onChange={(e) => setFormData({ ...formData, unit_of_measure: e.target.value as UnitOfMeasure })}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                    >
-                      <option value="PIECES">Pieces</option>
-                      <option value="METERS">Meters</option>
-                      <option value="KILOGRAMS">Kilograms</option>
-                      <option value="LITERS">Liters</option>
-                      <option value="BOXES">Boxes</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Minimum Stock</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={formData.minimum_stock_level}
-                      onChange={(e) => setFormData({ ...formData, minimum_stock_level: parseFloat(e.target.value) || 0 })}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Critical Stock</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={formData.critical_stock_level}
-                      onChange={(e) => setFormData({ ...formData, critical_stock_level: parseFloat(e.target.value) || 0 })}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                    {formErrors.critical_stock_level && <p className="text-red-500 text-xs mt-1">{formErrors.critical_stock_level}</p>}
-                  </div>
                 </div>
 
                 <div className="flex justify-end space-x-3 pt-4">
@@ -395,12 +353,12 @@ export default function ProductsPage() {
                   </button>
                   <button
                     type="submit"
-                    disabled={createProduct.isPending || updateProduct.isPending}
+                    disabled={createWarehouse.isPending || updateWarehouse.isPending}
                     className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
                   >
-                    {createProduct.isPending || updateProduct.isPending
+                    {createWarehouse.isPending || updateWarehouse.isPending
                       ? 'Saving...'
-                      : editingProduct
+                      : editingWarehouse
                       ? 'Update'
                       : 'Create'
                     }
