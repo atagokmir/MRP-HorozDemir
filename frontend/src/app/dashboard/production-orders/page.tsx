@@ -69,8 +69,11 @@ export default function ProductionOrdersPage() {
     status: statusFilter || undefined,
   });
 
-  const { data: bomsData } = useBOMs({ page_size: 1000 });
+  const { data: bomsData, isLoading: isLoadingBOMs, error: bomsError } = useBOMs({ page_size: 1000 });
   const boms = bomsData?.items || [];
+
+  // Debug logging
+  console.log('BOMs data:', { bomsData, boms, isLoadingBOMs, bomsError });
 
   const createOrder = useCreateProductionOrder();
   const updateOrder = useUpdateProductionOrder();
@@ -185,7 +188,7 @@ export default function ProductionOrdersPage() {
   };
 
   const getSelectedBOM = () => {
-    return boms.find(bom => bom.bom_id === formData.bom_id);
+    return boms.find(bom => (bom.bom_id ?? bom.id) === formData.bom_id);
   };
 
   if (error) {
@@ -428,15 +431,28 @@ export default function ProductionOrdersPage() {
                     value={formData.bom_id}
                     onChange={(e) => setFormData({ ...formData, bom_id: parseInt(e.target.value) })}
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                    disabled={isLoadingBOMs}
                   >
-                    <option value={0}>Select BOM</option>
-                    {boms.map((bom) => (
-                      <option key={bom.bom_id} value={bom.bom_id}>
-                        {bom.bom_name || bom.name} - {bom.product?.product_name} (v{bom.version})
-                      </option>
-                    ))}
+                    <option value={0}>
+                      {isLoadingBOMs ? 'Loading BOMs...' : bomsError ? 'Error loading BOMs' : 'Select BOM'}
+                    </option>
+                    {boms.map((bom) => {
+                      const bomId = bom.bom_id ?? bom.id;
+                      const bomName = bom.bom_name ?? bom.name ?? 'Unknown BOM';
+                      return (
+                        <option key={bomId} value={bomId}>
+                          {bomName} - {bom.product?.product_name ?? 'Unknown Product'} (v{bom.version})
+                        </option>
+                      );
+                    })}
                   </select>
                   {formErrors.bom_id && <p className="text-red-500 text-xs mt-1">{formErrors.bom_id}</p>}
+                  
+                  {/* Debug info */}
+                  <p className="text-xs text-gray-500 mt-1">
+                    {boms.length} BOMs available
+                    {bomsError && ` (Error: ${bomsError})`}
+                  </p>
                   
                   {/* BOM Info */}
                   {getSelectedBOM() && (

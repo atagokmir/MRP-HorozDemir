@@ -97,6 +97,34 @@ def list_boms(
                 "unit_of_measure": bom.parent_product.unit_of_measure
             }
         
+        # Add BOM items (components) to match frontend expectations
+        bom_items = []
+        for component in bom.bom_components:
+            bom_item = {
+                "bom_item_id": component.bom_component_id,
+                "bom_id": component.bom_id,
+                "product_id": component.component_product_id,
+                "quantity": float(component.quantity_required),
+                "unit_cost": 0.0,  # TODO: Calculate from inventory
+                "total_cost": 0.0,  # TODO: Calculate
+                "notes": component.notes,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            }
+            
+            # Add product info for component
+            if component.component_product:
+                bom_item["product"] = {
+                    "product_id": component.component_product.product_id,
+                    "product_code": component.component_product.product_code,
+                    "product_name": component.component_product.product_name,
+                    "product_type": component.component_product.product_type,
+                    "unit_of_measure": component.component_product.unit_of_measure
+                }
+            
+            bom_items.append(bom_item)
+        
+        item["bom_items"] = bom_items
         items.append(item)
     
     # Calculate pagination info

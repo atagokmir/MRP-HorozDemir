@@ -119,6 +119,18 @@ export class APIClient {
       throw new APIError(data, response.status);
     }
 
+    // Check if this is a direct individual item response (not wrapped in APIResponse format)
+    if (data.bom_id || data.production_order_id || data.stock_entry_id || 
+        data.warehouse_id || data.supplier_id || data.product_id) {
+      // Direct object response from backend - wrap it in APIResponse format
+      return {
+        status: 'success',
+        data: data,
+        message: 'Data retrieved successfully',
+        timestamp: new Date().toISOString()
+      };
+    }
+
     // Backend returns different formats, normalize to frontend expectation
     if ((data.status === 'success' && !data.data) || (data.items && !data.status)) {
       // Backend format: { items: [...], pagination: {...}, status: "success" }

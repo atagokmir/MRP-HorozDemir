@@ -29,7 +29,7 @@ export function useBOM(id: number) {
       const response = await apiClient.get<BOM>(`/bom/${id}`);
       return response.data;
     },
-    enabled: !!id,
+    enabled: id > 0,
   });
 }
 

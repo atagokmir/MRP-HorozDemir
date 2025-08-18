@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useBOMs, useCreateBOM, useUpdateBOM, useDeleteBOM, useBOMCostCalculation } from '@/hooks/use-bom';
+import { useState, useEffect } from 'react';
+import { useBOMs, useBOM, useCreateBOM, useUpdateBOM, useDeleteBOM, useBOMCostCalculation } from '@/hooks/use-bom';
 import { useProducts } from '@/hooks/use-products';
 import { BOM, CreateBOMRequest, Product, ProductCategory, UnitOfMeasure } from '@/types/api';
 import { formatDate, handleAPIError, debounce } from '@/lib/utils';
@@ -29,6 +29,7 @@ export default function BOMPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingBOM, setEditingBOM] = useState<BOM | null>(null);
   const [viewingBOM, setViewingBOM] = useState<BOM | null>(null);
+  const [viewingBOMId, setViewingBOMId] = useState<number | null>(null);
   const [showCostModal, setShowCostModal] = useState(false);
   const [costCalculationId, setCostCalculationId] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -47,11 +48,19 @@ export default function BOMPage() {
   const { data: productsData } = useProducts({ page_size: 1000 });
   const products = productsData?.items || [];
 
-  const { data: costCalculation } = useBOMCostCalculation(costCalculationId || 0);
+  const { data: individualBOM, isLoading: isLoadingIndividualBOM, error: bomViewError } = useBOM(viewingBOMId ?? 0);
+  const { data: costCalculation, isLoading: isLoadingCostCalculation, error: costCalculationError } = useBOMCostCalculation(costCalculationId || 0);
 
   const createBOM = useCreateBOM();
   const updateBOM = useUpdateBOM();
   const deleteBOM = useDeleteBOM();
+
+  // Effect to set viewingBOM when individual BOM data is loaded
+  useEffect(() => {
+    if (individualBOM && viewingBOMId) {
+      setViewingBOM(individualBOM);
+    }
+  }, [individualBOM, viewingBOMId]);
 
   const [formData, setFormData] = useState<BOMFormData>({
     product_id: 0,
@@ -148,7 +157,17 @@ export default function BOMPage() {
   };
 
   const handleView = (bom: BOM) => {
-    setViewingBOM(bom);
+    const bomId = bom.bom_id ?? bom.id;
+    
+    if (!bomId) {
+      alert('Invalid BOM ID for view operation');
+      return;
+    }
+
+    // Reset viewing state first
+    setViewingBOM(null);
+    // Set the ID to trigger the useBOM hook
+    setViewingBOMId(bomId);
   };
 
   const handleViewCost = (bomId: number) => {
@@ -581,15 +600,34 @@ export default function BOMPage() {
       )}
 
       {/* View Modal */}
-      {viewingBOM && (
+      {viewingBOMId && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-3xl shadow-lg rounded-md bg-white">
             <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                BOM Details: {viewingBOM.bom_name ?? viewingBOM.name ?? 'Unknown BOM'}
-              </h3>
-              
-              <div className="space-y-4">
+              {isLoadingIndividualBOM ? (
+                <div className="text-center py-8">
+                  <div className="animate-pulse">Loading BOM details...</div>
+                </div>
+              ) : bomViewError ? (
+                <div className="text-center py-8">
+                  <div className="text-red-600">Error loading BOM details: {handleAPIError(bomViewError)}</div>
+                  <button
+                    onClick={() => {
+                      setViewingBOM(null);
+                      setViewingBOMId(null);
+                    }}
+                    className="mt-2 px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
+                  >
+                    Close
+                  </button>
+                </div>
+              ) : viewingBOM ? (
+                <>
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">
+                    BOM Details: {viewingBOM.bom_name ?? viewingBOM.name ?? 'Unknown BOM'}
+                  </h3>
+                  
+                  <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm font-medium text-gray-700">BOM Code</p>
@@ -627,28 +665,45 @@ export default function BOMPage() {
                         </tr>
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
-                        {viewingBOM.bom_items?.map((item, index) => (
-                          <tr key={`view-item-${item.product_id}-${index}`}>
-                            <td className="px-4 py-2 text-sm text-gray-900">
-                              {item.product?.product_name ?? 'Unknown Product'} ({item.product?.product_code ?? 'No Code'})
-                            </td>
-                            <td className="px-4 py-2 text-sm text-gray-900">
-                              {item.quantity}
-                            </td>
-                            <td className="px-4 py-2 text-sm text-gray-900">
-                              {item.notes ?? '-'}
+                        {viewingBOM.bom_items && viewingBOM.bom_items.length > 0 ? (
+                          viewingBOM.bom_items.map((item, index) => (
+                            <tr key={`view-item-${item.product_id}-${index}`}>
+                              <td className="px-4 py-2 text-sm text-gray-900">
+                                {item.product?.product_name ?? 'Unknown Product'} ({item.product?.product_code ?? 'No Code'})
+                              </td>
+                              <td className="px-4 py-2 text-sm text-gray-900">
+                                {item.quantity}
+                              </td>
+                              <td className="px-4 py-2 text-sm text-gray-900">
+                                {item.notes ?? '-'}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={3} className="px-4 py-2 text-sm text-gray-500 text-center">
+                              No BOM items found
                             </td>
                           </tr>
-                        )) ?? []}
+                        )}
                       </tbody>
                     </table>
                   </div>
                 </div>
               </div>
+                </>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  No BOM details available
+                </div>
+              )}
 
               <div className="flex justify-end pt-4">
                 <button
-                  onClick={() => setViewingBOM(null)}
+                  onClick={() => {
+                    setViewingBOM(null);
+                    setViewingBOMId(null);
+                  }}
                   className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
                   Close
@@ -660,7 +715,7 @@ export default function BOMPage() {
       )}
 
       {/* Cost Calculation Modal */}
-      {showCostModal && costCalculation && (
+      {showCostModal && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-full max-w-3xl shadow-lg rounded-md bg-white">
             <div className="mt-3">
@@ -668,47 +723,76 @@ export default function BOMPage() {
                 Cost Calculation
               </h3>
               
-              <div className="space-y-4">
-                <div className="bg-green-50 p-4 rounded-md">
-                  <p className="text-lg font-medium text-green-900">
-                    Total Cost: ${costCalculation.total_cost.toFixed(2)}
-                  </p>
+              {isLoadingCostCalculation ? (
+                <div className="text-center py-8">
+                  <div className="animate-pulse">Loading cost calculation...</div>
                 </div>
+              ) : costCalculationError ? (
+                <div className="text-center py-8">
+                  <div className="text-red-600">Error loading cost calculation: {handleAPIError(costCalculationError)}</div>
+                  <button
+                    onClick={() => {
+                      setShowCostModal(false);
+                      setCostCalculationId(null);
+                    }}
+                    className="mt-2 px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
+                  >
+                    Close
+                  </button>
+                </div>
+              ) : costCalculation ? (
+                <div className="space-y-4">
+                  <div className="bg-green-50 p-4 rounded-md">
+                    <p className="text-lg font-medium text-green-900">
+                      Total Cost: ${costCalculation.total_cost?.toFixed(2) || '0.00'}
+                    </p>
+                  </div>
 
-                <div>
-                  <p className="text-sm font-medium text-gray-700 mb-2">Detailed Costs</p>
-                  <div className="border border-gray-300 rounded-md">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Quantity</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Unit Cost</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {costCalculation.detailed_costs.map((cost, index) => (
-                          <tr key={`cost-${cost.product_name}-${index}`}>
-                            <td className="px-4 py-2 text-sm text-gray-900">
-                              {cost.product_name}
-                            </td>
-                            <td className="px-4 py-2 text-sm text-gray-900">
-                              {cost.quantity}
-                            </td>
-                            <td className="px-4 py-2 text-sm text-gray-900">
-                              ${cost.unit_cost.toFixed(2)}
-                            </td>
-                            <td className="px-4 py-2 text-sm text-gray-900">
-                              ${cost.total_cost.toFixed(2)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">Detailed Costs</p>
+                    {costCalculation.detailed_costs && costCalculation.detailed_costs.length > 0 ? (
+                      <div className="border border-gray-300 rounded-md">
+                        <table className="min-w-full divide-y divide-gray-200">
+                          <thead className="bg-gray-50">
+                            <tr>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Quantity</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Unit Cost</th>
+                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-gray-200">
+                            {costCalculation.detailed_costs.map((cost, index) => (
+                              <tr key={`cost-${cost.product_name || 'unknown'}-${index}`}>
+                                <td className="px-4 py-2 text-sm text-gray-900">
+                                  {cost.product_name || 'Unknown Product'}
+                                </td>
+                                <td className="px-4 py-2 text-sm text-gray-900">
+                                  {cost.quantity || 0}
+                                </td>
+                                <td className="px-4 py-2 text-sm text-gray-900">
+                                  ${cost.unit_cost?.toFixed(2) || '0.00'}
+                                </td>
+                                <td className="px-4 py-2 text-sm text-gray-900">
+                                  ${cost.total_cost?.toFixed(2) || '0.00'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="border border-gray-300 rounded-md p-4 text-center text-gray-500">
+                        No detailed costs available
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500">
+                  No cost calculation data available
+                </div>
+              )}
 
               <div className="flex justify-end pt-4">
                 <button
