@@ -4,9 +4,12 @@ Handles CRUD operations for core system entities.
 """
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query, Path
+from fastapi import APIRouter, Depends, Query, Path, Request, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select, and_
+import logging
+import json
+from pydantic import ValidationError
 
 from app.dependencies import (
     get_db, get_current_active_user, require_permissions,
@@ -239,7 +242,8 @@ def get_product(
 
 
 @router.post("/products")  # TODO: response_model=IDResponse)
-def create_product(
+async def create_product(
+    request: Request,
     product_create: ProductCreate,
     session: Session = Depends(get_db),
     current_user: UserInfo = require_permissions("write:products")
@@ -254,25 +258,49 @@ def create_product(
     - **standard_cost**: Standard cost per unit (optional)
     - **critical_stock_level**: Critical stock level (optional)
     """
-    # Check for duplicate product code
-    query = select(ProductModel).where(
-        ProductModel.product_code == product_create.product_code.upper()
-    )
-    result = session.execute(query)
-    if result.scalar_one_or_none():
-        raise ConflictError(f"Product code '{product_create.product_code}' already exists")
+    logger = logging.getLogger(__name__)
     
-    product = product_service.create(
-        session,
-        product_create.dict(),
-        current_user.user_id
-    )
-    session.commit()
-    
-    return IDResponse(
-        id=product.product_id,
-        message=f"Product '{product.product_name}' created successfully"
-    )
+    try:
+        # Log the raw request body for debugging
+        raw_body = await request.body()
+        logger.info(f"Product creation request - Raw body: {raw_body.decode('utf-8')}")
+        logger.info(f"Product creation request - Headers: {dict(request.headers)}")
+        logger.info(f"Product creation request - Content-Type: {request.headers.get('content-type')}")
+        
+        # Log the parsed request object
+        logger.info(f"Product creation request - Parsed ProductCreate object: {product_create.dict()}")
+        logger.info(f"Product creation request - Product type value: {product_create.product_type}")
+        logger.info(f"Product creation request - Product type type: {type(product_create.product_type)}")
+        
+        # Check for duplicate product code
+        query = select(ProductModel).where(
+            ProductModel.product_code == product_create.product_code.upper()
+        )
+        result = session.execute(query)
+        if result.scalar_one_or_none():
+            raise ConflictError(f"Product code '{product_create.product_code}' already exists")
+        
+        product = product_service.create(
+            session,
+            product_create.dict(),
+            current_user.user_id
+        )
+        session.commit()
+        
+        logger.info(f"Product created successfully - ID: {product.product_id}, Name: {product.product_name}")
+        
+        return IDResponse(
+            id=product.product_id,
+            message=f"Product '{product.product_name}' created successfully"
+        )
+        
+    except ValidationError as e:
+        logger.error(f"Product validation error: {e}")
+        logger.error(f"Validation error details: {e.errors()}")
+        raise HTTPException(status_code=422, detail=f"Validation error: {e.errors()}")
+    except Exception as e:
+        logger.error(f"Product creation error: {e}", exc_info=True)
+        raise
 
 
 @router.put("/products/{product_id}")  # TODO: response_model=Product)

@@ -36,7 +36,7 @@ class ProductionComponentList:
     pass
 
 
-@router.get("/orders")  # TODO: response_model=PaginatedResponse[ProductionOrder])
+@router.get("/")  # TODO: response_model=PaginatedResponse[ProductionOrder])
 def list_production_orders(
     pagination: PaginationParams = Depends(get_pagination_params),
     status: Optional[str] = Query(None, description="Filter by status"),
@@ -64,7 +64,7 @@ def list_production_orders(
     )
 
 
-@router.get("/orders/{order_id}")  # TODO: # response_model=ProductionOrder
+@router.get("/{order_id}")  # TODO: # response_model=ProductionOrder
 def get_production_order(
     order_id: int = Path(..., description="Production order ID"),
     session: Session = Depends(get_db),
@@ -75,7 +75,7 @@ def get_production_order(
     raise NotFoundError("Production Order", order_id)
 
 
-@router.post("/orders")  # TODO: response_model=IDResponse)
+@router.post("/")  # TODO: response_model=IDResponse)
 def create_production_order(
     # order_request: ProductionOrderRequest,  # TODO: Implement proper schema
     session: Session = Depends(get_db),
@@ -90,7 +90,30 @@ def create_production_order(
     return IDResponse(id=1, message="Production order created successfully")
 
 
-@router.put("/orders/{order_id}/status")  # TODO: response_model=ProductionOrder
+@router.put("/{order_id}")  # TODO: response_model=ProductionOrder
+def update_production_order(
+    order_id: int = Path(..., description="Production order ID"),
+    # order_update: ProductionOrderUpdate = ...,  # TODO: Implement proper schema
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("write:production")
+):
+    """Update production order information."""
+    # TODO: Implement production order update
+    raise NotFoundError("Production Order", order_id)
+
+
+@router.delete("/{order_id}")  # TODO: response_model=MessageResponse
+def delete_production_order(
+    order_id: int = Path(..., description="Production order ID"),
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("delete:production")
+):
+    """Delete production order."""
+    # TODO: Implement production order deletion
+    raise NotFoundError("Production Order", order_id)
+
+
+@router.put("/{order_id}/status")  # TODO: response_model=ProductionOrder
 def update_production_order_status(
     order_id: int = Path(..., description="Production order ID"),
     status: str = Query(..., description="New status"),
@@ -106,7 +129,7 @@ def update_production_order_status(
     raise NotFoundError("Production Order", order_id)
 
 
-@router.get("/orders/{order_id}/components")  # TODO: response_model=ProductionComponentList)
+@router.get("/{order_id}/components")  # TODO: response_model=ProductionComponentList)
 def get_production_order_components(
     order_id: int = Path(..., description="Production order ID"),
     session: Session = Depends(get_db),
@@ -121,7 +144,7 @@ def get_production_order_components(
     return ProductionComponentList(components=[], order_id=order_id)
 
 
-@router.post("/orders/{order_id}/complete")  # TODO: response_model=ProductionOrder
+@router.post("/{order_id}/complete")  # TODO: response_model=ProductionOrder
 def complete_production_order(
     order_id: int = Path(..., description="Production order ID"),
     # completion_data: ProductionCompletion = ...,  # TODO: Implement proper schema

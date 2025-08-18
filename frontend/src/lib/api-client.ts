@@ -131,16 +131,16 @@ export class APIClient {
         const normalizedItems = items.map((item: any) => {
           const normalized = { ...item };
           
-          // Warehouse field normalization
-          if (item.warehouse_id) {
+          // Warehouse field normalization (top-level)
+          if (item.warehouse_id && !item.inventory_item_id) {
             normalized.id = item.warehouse_id;
             normalized.code = item.warehouse_code;
             normalized.name = item.warehouse_name;
             normalized.type = item.warehouse_type;
           }
           
-          // Product field normalization
-          if (item.product_id) {
+          // Product field normalization (top-level)
+          if (item.product_id && !item.inventory_item_id) {
             normalized.id = item.product_id;
             normalized.code = item.product_code;
             normalized.name = item.product_name;
@@ -150,8 +150,30 @@ export class APIClient {
           // Inventory item field normalization
           if (item.inventory_item_id) {
             normalized.id = item.inventory_item_id;
-            normalized.available_quantity = parseFloat(item.quantity_in_stock) - parseFloat(item.reserved_quantity);
-            normalized.total_cost = parseFloat(item.quantity_in_stock) * parseFloat(item.unit_cost);
+            normalized.available_quantity = parseFloat(item.quantity_in_stock || 0) - parseFloat(item.reserved_quantity || 0);
+            normalized.total_cost = parseFloat(item.quantity_in_stock || 0) * parseFloat(item.unit_cost || 0);
+            
+            // Normalize nested product object
+            if (item.product) {
+              normalized.product = {
+                ...item.product,
+                id: item.product.product_id,
+                code: item.product.product_code,
+                name: item.product.product_name,
+                category: item.product.product_type,
+              };
+            }
+            
+            // Normalize nested warehouse object
+            if (item.warehouse) {
+              normalized.warehouse = {
+                ...item.warehouse,
+                id: item.warehouse.warehouse_id,
+                code: item.warehouse.warehouse_code,
+                name: item.warehouse.warehouse_name,
+                type: item.warehouse.warehouse_type,
+              };
+            }
           }
           
           return normalized;
@@ -223,21 +245,41 @@ export class APIClient {
     // Transform frontend field names to backend field names for creation
     let transformedBody = body;
     if (body && endpoint.includes('/master-data/products')) {
-      transformedBody = {
-        product_code: body.code,
-        product_name: body.name,
-        product_type: body.category,
-        unit_of_measure: body.unit_of_measure,
-        minimum_stock_level: body.minimum_stock_level,
-        critical_stock_level: body.critical_stock_level,
-        description: body.description,
-      };
+      // Check if body already has backend field names (product_code, product_name, product_type)
+      // If so, use as-is. Otherwise, transform from frontend field names.
+      if (body.product_code && body.product_name && body.product_type) {
+        // Body already has correct backend field names
+        transformedBody = body;
+      } else {
+        // Transform from frontend field names
+        transformedBody = {
+          product_code: body.code,
+          product_name: body.name,
+          product_type: body.category,
+          unit_of_measure: body.unit_of_measure,
+          minimum_stock_level: body.minimum_stock_level,
+          critical_stock_level: body.critical_stock_level,
+          description: body.description,
+        };
+      }
     } else if (body && endpoint.includes('/master-data/warehouses')) {
       transformedBody = {
         warehouse_code: body.code,
         warehouse_name: body.name,
         warehouse_type: body.type,
         location: body.location,
+      };
+    } else if (body && endpoint.includes('/master-data/suppliers')) {
+      // Transform supplier field names from frontend to backend
+      // Note: tax_number is excluded as it's not in the actual database model
+      transformedBody = {
+        supplier_code: body.code,
+        supplier_name: body.name,
+        contact_person: body.contact_person,
+        email: body.email,
+        phone: body.phone,
+        address: body.address,
+        payment_terms: body.payment_terms,
       };
     }
     
@@ -251,21 +293,41 @@ export class APIClient {
     // Transform frontend field names to backend field names for updates
     let transformedBody = body;
     if (body && endpoint.includes('/master-data/products')) {
-      transformedBody = {
-        product_code: body.code,
-        product_name: body.name,
-        product_type: body.category,
-        unit_of_measure: body.unit_of_measure,
-        minimum_stock_level: body.minimum_stock_level,
-        critical_stock_level: body.critical_stock_level,
-        description: body.description,
-      };
+      // Check if body already has backend field names (product_name, product_type)
+      // If so, use as-is. Otherwise, transform from frontend field names.
+      if (body.product_name && body.product_type) {
+        // Body already has correct backend field names
+        transformedBody = body;
+      } else {
+        // Transform from frontend field names
+        transformedBody = {
+          product_code: body.code,
+          product_name: body.name,
+          product_type: body.category,
+          unit_of_measure: body.unit_of_measure,
+          minimum_stock_level: body.minimum_stock_level,
+          critical_stock_level: body.critical_stock_level,
+          description: body.description,
+        };
+      }
     } else if (body && endpoint.includes('/master-data/warehouses')) {
       transformedBody = {
         warehouse_code: body.code,
         warehouse_name: body.name,
         warehouse_type: body.type,
         location: body.location,
+      };
+    } else if (body && endpoint.includes('/master-data/suppliers')) {
+      // Transform supplier field names from frontend to backend
+      // Note: tax_number is excluded as it's not in the actual database model
+      transformedBody = {
+        supplier_code: body.code,
+        supplier_name: body.name,
+        contact_person: body.contact_person,
+        email: body.email,
+        phone: body.phone,
+        address: body.address,
+        payment_terms: body.payment_terms,
       };
     }
     

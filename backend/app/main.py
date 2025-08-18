@@ -10,6 +10,8 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -150,9 +152,71 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle FastAPI request validation errors with detailed information."""
+    logger.error(f"Validation error for {request.method} {request.url}: {exc.errors()}")
+    
+    # Get the raw request body for debugging
+    try:
+        body = await request.body()
+        body_str = body.decode('utf-8') if body else "Empty body"
+        logger.error(f"Request body that caused validation error: {body_str}")
+    except Exception as e:
+        logger.error(f"Could not read request body: {e}")
+        body_str = "Could not decode body"
+    
+    # Ensure errors are JSON serializable
+    try:
+        error_details = []
+        for error in exc.errors():
+            error_dict = {
+                "type": error.get("type", "unknown"),
+                "loc": list(error.get("loc", [])),
+                "msg": str(error.get("msg", "Unknown error")),
+                "input": str(error.get("input", "")) if error.get("input") is not None else None
+            }
+            error_details.append(error_dict)
+    except Exception as e:
+        logger.error(f"Error processing validation errors: {e}")
+        error_details = [{"type": "processing_error", "msg": "Could not process validation errors"}]
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "status": "error",
+            "message": "Validation error",
+            "error_code": "REQUEST_VALIDATION_ERROR",
+            "details": error_details,
+            "timestamp": datetime.now().isoformat(),
+            "path": str(request.url)
+        }
+    )
+
+
+@app.exception_handler(ValidationError)
+async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
+    """Handle Pydantic validation errors with detailed information."""
+    logger.error(f"Pydantic validation error for {request.method} {request.url}: {exc.errors()}")
+    
+    return JSONResponse(
+        status_code=422,
+        content={
+            "status": "error",
+            "message": "Data validation error",
+            "error_code": "PYDANTIC_VALIDATION_ERROR",
+            "details": exc.errors(),
+            "timestamp": datetime.now().isoformat(),
+            "path": str(request.url)
+        }
+    )
+
+
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError):
     """Handle value errors as validation errors."""
+    logger.error(f"Value error for {request.method} {request.url}: {str(exc)}")
+    
     return JSONResponse(
         status_code=422,
         content={
@@ -269,7 +333,7 @@ app.include_router(
 
 app.include_router(
     production_router,
-    prefix="/api/v1/production",
+    prefix="/api/v1/production-orders",
     tags=["Production Management"],
     dependencies=[],
     responses={

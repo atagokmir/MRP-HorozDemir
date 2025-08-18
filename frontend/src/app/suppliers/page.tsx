@@ -36,7 +36,6 @@ export default function SuppliersPage() {
     email: '',
     phone: '',
     address: '',
-    tax_number: '',
     payment_terms: '',
   });
 
@@ -50,6 +49,10 @@ export default function SuppliersPage() {
     
     if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       errors.email = 'Please enter a valid email address';
+    }
+
+    if (formData.phone && formData.phone.length > 20) {
+      errors.phone = 'Phone number must be 20 characters or less';
     }
 
     setFormErrors(errors);
@@ -89,7 +92,6 @@ export default function SuppliersPage() {
       email: supplier.email || '',
       phone: supplier.phone || '',
       address: supplier.address || '',
-      tax_number: supplier.tax_number || '',
       payment_terms: supplier.payment_terms || '',
     });
     setFormErrors({});
@@ -116,7 +118,6 @@ export default function SuppliersPage() {
       email: '',
       phone: '',
       address: '',
-      tax_number: '',
       payment_terms: '',
     });
     setFormErrors({});
@@ -236,9 +237,6 @@ export default function SuppliersPage() {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       <div className="space-y-1">
-                        {supplier.tax_number && (
-                          <div>Tax: {supplier.tax_number}</div>
-                        )}
                         {supplier.payment_terms && (
                           <div>Terms: {supplier.payment_terms}</div>
                         )}
@@ -367,19 +365,12 @@ export default function SuppliersPage() {
                       type="tel"
                       value={formData.phone}
                       onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                      maxLength={20}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                     />
+                    {formErrors.phone && <p className="text-red-500 text-xs mt-1">{formErrors.phone}</p>}
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Tax Number</label>
-                    <input
-                      type="text"
-                      value={formData.tax_number}
-                      onChange={(e) => setFormData({ ...formData, tax_number: e.target.value })}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                  </div>
                 </div>
 
                 <div>

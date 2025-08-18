@@ -54,8 +54,7 @@ def login(
                 update(UserModel)
                 .where(UserModel.user_id == user.user_id)
                 .values(
-                    failed_login_attempts=UserModel.failed_login_attempts + 1,
-                    last_failed_login=datetime.now()
+                    failed_login_attempts=UserModel.failed_login_attempts + 1
                 )
             )
             session.commit()

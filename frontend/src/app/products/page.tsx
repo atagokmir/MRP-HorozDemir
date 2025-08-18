@@ -2,11 +2,63 @@
 
 import { useState } from 'react';
 import { useProducts, useCreateProduct, useUpdateProduct, useDeleteProduct } from '@/hooks/use-products';
-import { Product, CreateProductRequest, ProductCategory, UnitOfMeasure } from '@/types/api';
+import { Product, CreateProductRequest, ProductCategory, ProductType, UnitOfMeasure } from '@/types/api';
 import { formatDate, getCategoryColor, handleAPIError, debounce } from '@/lib/utils';
 import { PlusIcon, PencilIcon, TrashIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 
-type ProductFormData = CreateProductRequest;
+type ProductFormData = {
+  product_code: string;
+  product_name: string;
+  description?: string;
+  product_type: ProductType;
+  unit_of_measure: string;
+  minimum_stock_level: number;
+  critical_stock_level: number;
+  standard_cost?: number;
+};
+
+// Helper functions to convert between frontend and backend enums
+const categoryToProductType = (category: ProductCategory): ProductType => {
+  const mapping = {
+    'RAW_MATERIALS': 'RAW_MATERIAL' as ProductType,
+    'SEMI_FINISHED': 'SEMI_FINISHED' as ProductType,
+    'FINISHED_PRODUCTS': 'FINISHED_PRODUCT' as ProductType,
+    'PACKAGING': 'PACKAGING' as ProductType
+  };
+  return mapping[category];
+};
+
+const productTypeToCategory = (productType: ProductType): ProductCategory => {
+  const mapping = {
+    'RAW_MATERIAL': 'RAW_MATERIALS' as ProductCategory,
+    'SEMI_FINISHED': 'SEMI_FINISHED' as ProductCategory,
+    'FINISHED_PRODUCT': 'FINISHED_PRODUCTS' as ProductCategory,
+    'PACKAGING': 'PACKAGING' as ProductCategory
+  };
+  return mapping[productType];
+};
+
+const unitOfMeasureToBackend = (unit: UnitOfMeasure): string => {
+  const mapping = {
+    'PIECES': 'pcs',
+    'METERS': 'm',
+    'KILOGRAMS': 'kg',
+    'LITERS': 'l',
+    'BOXES': 'box'
+  };
+  return mapping[unit] || unit.toLowerCase();
+};
+
+const backendToUnitOfMeasure = (unit: string): UnitOfMeasure => {
+  const mapping = {
+    'pcs': 'PIECES' as UnitOfMeasure,
+    'm': 'METERS' as UnitOfMeasure,
+    'kg': 'KILOGRAMS' as UnitOfMeasure,
+    'l': 'LITERS' as UnitOfMeasure,
+    'box': 'BOXES' as UnitOfMeasure
+  };
+  return mapping[unit.toLowerCase()] || 'PIECES' as UnitOfMeasure;
+};
 
 export default function ProductsPage() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -32,13 +84,14 @@ export default function ProductsPage() {
   const deleteProduct = useDeleteProduct();
 
   const [formData, setFormData] = useState<ProductFormData>({
-    code: '',
-    name: '',
+    product_code: '',
+    product_name: '',
     description: '',
-    category: 'RAW_MATERIALS',
-    unit_of_measure: 'PIECES',
+    product_type: 'RAW_MATERIAL',
+    unit_of_measure: 'pcs',
     minimum_stock_level: 0,
     critical_stock_level: 0,
+    standard_cost: 0,
   });
 
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -46,8 +99,9 @@ export default function ProductsPage() {
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
 
-    if (!formData.code.trim()) errors.code = 'Product code is required';
-    if (!formData.name.trim()) errors.name = 'Product name is required';
+    if (!formData.product_code.trim()) errors.product_code = 'Product code is required';
+    if (!formData.product_name.trim()) errors.product_name = 'Product name is required';
+    if (!formData.product_type) errors.product_type = 'Product type is required';
     if (formData.critical_stock_level > formData.minimum_stock_level) {
       errors.critical_stock_level = 'Critical level cannot be higher than minimum level';
     }
@@ -62,12 +116,33 @@ export default function ProductsPage() {
 
     try {
       if (editingProduct) {
+        // Convert form data to match backend schema for update
+        const updatePayload: Partial<CreateProductRequest> = {
+          product_name: formData.product_name,
+          description: formData.description,
+          product_type: formData.product_type,
+          unit_of_measure: formData.unit_of_measure,
+          minimum_stock_level: formData.minimum_stock_level,
+          critical_stock_level: formData.critical_stock_level,
+          standard_cost: formData.standard_cost
+        };
         await updateProduct.mutateAsync({
-          id: editingProduct.id,
-          data: formData,
+          id: editingProduct.product_id || editingProduct.id,
+          data: updatePayload,
         });
       } else {
-        await createProduct.mutateAsync(formData);
+        // Convert form data to match backend schema
+        const payload: CreateProductRequest = {
+          product_code: formData.product_code,
+          product_name: formData.product_name,
+          description: formData.description,
+          product_type: formData.product_type,
+          unit_of_measure: formData.unit_of_measure,
+          minimum_stock_level: formData.minimum_stock_level,
+          critical_stock_level: formData.critical_stock_level,
+          standard_cost: formData.standard_cost
+        };
+        await createProduct.mutateAsync(payload);
       }
       handleCloseModal();
     } catch (error) {
@@ -78,13 +153,14 @@ export default function ProductsPage() {
   const handleEdit = (product: Product) => {
     setEditingProduct(product);
     setFormData({
-      code: product.code,
-      name: product.name,
+      product_code: product.product_code || product.code || '',
+      product_name: product.product_name || product.name || '',
       description: product.description || '',
-      category: product.category,
+      product_type: product.product_type || categoryToProductType(product.category || 'RAW_MATERIALS'),
       unit_of_measure: product.unit_of_measure,
       minimum_stock_level: product.minimum_stock_level,
       critical_stock_level: product.critical_stock_level,
+      standard_cost: product.standard_cost || 0,
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -104,13 +180,14 @@ export default function ProductsPage() {
     setIsModalOpen(false);
     setEditingProduct(null);
     setFormData({
-      code: '',
-      name: '',
+      product_code: '',
+      product_name: '',
       description: '',
-      category: 'RAW_MATERIALS',
-      unit_of_measure: 'PIECES',
+      product_type: 'RAW_MATERIAL',
+      unit_of_measure: 'pcs',
       minimum_stock_level: 0,
       critical_stock_level: 0,
+      standard_cost: 0,
     });
     setFormErrors({});
   };
@@ -215,7 +292,7 @@ export default function ProductsPage() {
                           {product.name}
                         </div>
                         <div className="text-sm text-gray-500">
-                          Code: {product.code}
+                          Code: {product.product_code || product.code}
                         </div>
                         {product.description && (
                           <div className="text-sm text-gray-400 truncate max-w-xs">
@@ -225,8 +302,8 @@ export default function ProductsPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getCategoryColor(product.category)}`}>
-                        {product.category.replace('_', ' ')}
+                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getCategoryColor(product.category || productTypeToCategory(product.product_type || 'RAW_MATERIAL'))}`}>
+                        {(product.category || productTypeToCategory(product.product_type || 'RAW_MATERIAL')).replace('_', ' ')}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-900">
@@ -299,22 +376,22 @@ export default function ProductsPage() {
                   <label className="block text-sm font-medium text-gray-700">Product Code</label>
                   <input
                     type="text"
-                    value={formData.code}
-                    onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                    value={formData.product_code}
+                    onChange={(e) => setFormData({ ...formData, product_code: e.target.value })}
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                   />
-                  {formErrors.code && <p className="text-red-500 text-xs mt-1">{formErrors.code}</p>}
+                  {formErrors.product_code && <p className="text-red-500 text-xs mt-1">{formErrors.product_code}</p>}
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Product Name</label>
                   <input
                     type="text"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    value={formData.product_name}
+                    onChange={(e) => setFormData({ ...formData, product_name: e.target.value })}
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                   />
-                  {formErrors.name && <p className="text-red-500 text-xs mt-1">{formErrors.name}</p>}
+                  {formErrors.product_name && <p className="text-red-500 text-xs mt-1">{formErrors.product_name}</p>}
                 </div>
 
                 <div>
@@ -327,33 +404,46 @@ export default function ProductsPage() {
                   />
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Standard Cost (optional)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={formData.standard_cost || ''}
+                    onChange={(e) => setFormData({ ...formData, standard_cost: parseFloat(e.target.value) || undefined })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Category</label>
                     <select
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value as ProductCategory })}
+                      value={formData.product_type}
+                      onChange={(e) => setFormData({ ...formData, product_type: e.target.value as ProductType })}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                     >
-                      <option value="RAW_MATERIALS">Raw Materials</option>
+                      <option value="RAW_MATERIAL">Raw Material</option>
                       <option value="SEMI_FINISHED">Semi-Finished</option>
-                      <option value="FINISHED_PRODUCTS">Finished Products</option>
+                      <option value="FINISHED_PRODUCT">Finished Product</option>
                       <option value="PACKAGING">Packaging</option>
                     </select>
+                    {formErrors.product_type && <p className="text-red-500 text-xs mt-1">{formErrors.product_type}</p>}
                   </div>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Unit</label>
                     <select
                       value={formData.unit_of_measure}
-                      onChange={(e) => setFormData({ ...formData, unit_of_measure: e.target.value as UnitOfMeasure })}
+                      onChange={(e) => setFormData({ ...formData, unit_of_measure: e.target.value })}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                     >
-                      <option value="PIECES">Pieces</option>
-                      <option value="METERS">Meters</option>
-                      <option value="KILOGRAMS">Kilograms</option>
-                      <option value="LITERS">Liters</option>
-                      <option value="BOXES">Boxes</option>
+                      <option value="pcs">Pieces</option>
+                      <option value="m">Meters</option>
+                      <option value="kg">Kilograms</option>
+                      <option value="l">Liters</option>
+                      <option value="box">Boxes</option>
                     </select>
                   </div>
                 </div>

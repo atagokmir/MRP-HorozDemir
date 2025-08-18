@@ -5,6 +5,7 @@ Handles BOM management, component relationships, and cost calculations.
 
 from typing import List, Optional
 from decimal import Decimal
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query, Path
 from sqlalchemy.orm import Session
 
@@ -40,7 +41,7 @@ class BOMCostCalculation:
     pass
 
 
-@router.get("/list")  # TODO: # response_model=PaginatedResponse[BOM]
+@router.get("/")  # TODO: # response_model=PaginatedResponse[BOM]
 def list_boms(
     pagination: PaginationParams = Depends(get_pagination_params),
     product_id: Optional[int] = Query(None, description="Filter by product ID"),
@@ -78,7 +79,7 @@ def get_bom(
     raise NotFoundError("BOM", bom_id)
 
 
-@router.post("/create")  # TODO: response_model=IDResponse)
+@router.post("/")  # TODO: response_model=IDResponse)
 def create_bom(
     # bom_create: BOMCreate,  # TODO: Implement proper BOM schema
     session: Session = Depends(get_db),
@@ -129,7 +130,7 @@ def explode_bom(
     )
 
 
-@router.post("/{bom_id}/cost-calculation")  # TODO: # response_model=BOMCostCalculation
+@router.get("/{bom_id}/cost-calculation")  # TODO: # response_model=BOMCostCalculation
 def calculate_bom_cost(
     bom_id: int = Path(..., description="BOM ID"),
     quantity: Decimal = Query(Decimal('1'), description="Quantity for calculation"),
@@ -142,14 +143,28 @@ def calculate_bom_cost(
     Uses FIFO costing for accurate material cost calculation.
     """
     # TODO: Implement BOM cost calculation with FIFO
-    return BOMCostCalculation(
-        bom_id=bom_id,
-        quantity=quantity,
-        material_cost=Decimal('0'),
-        labor_cost=Decimal('0'),
-        overhead_cost=Decimal('0'),
-        total_cost=Decimal('0')
-    )
+    return {
+        "bom_id": bom_id,
+        "quantity": float(quantity),
+        "material_cost": 0.0,
+        "labor_cost": 0.0,
+        "overhead_cost": 0.0,
+        "total_cost": 0.0,
+        "status": "success",
+        "message": "BOM cost calculation completed (placeholder)",
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+@router.delete("/{bom_id}")  # TODO: # response_model=MessageResponse
+def delete_bom(
+    bom_id: int = Path(..., description="BOM ID"),
+    session: Session = Depends(get_db),
+    current_user: UserInfo = require_permissions("delete:bom")
+):
+    """Delete BOM and its components."""
+    # TODO: Implement BOM deletion
+    raise NotFoundError("BOM", bom_id)
 
 
 @router.put("/{bom_id}/status")  # TODO: # response_model=BOM

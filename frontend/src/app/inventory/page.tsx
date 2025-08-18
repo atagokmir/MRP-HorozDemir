@@ -61,12 +61,12 @@ export default function InventoryPage() {
     ? criticalStock.filter(item => {
         if (searchTerm) {
           const searchLower = searchTerm.toLowerCase();
-          return item.product?.name.toLowerCase().includes(searchLower) ||
-                 item.product?.code.toLowerCase().includes(searchLower);
+          return (item.product?.product_name || item.product?.name || '').toLowerCase().includes(searchLower) ||
+                 (item.product?.product_code || item.product?.code || '').toLowerCase().includes(searchLower);
         }
         if (productFilter) return item.product_id === productFilter;
         if (warehouseFilter) return item.warehouse_id === warehouseFilter;
-        if (categoryFilter) return item.product?.category === categoryFilter;
+        if (categoryFilter) return (item.product?.product_type || item.product?.category) === categoryFilter;
         if (statusFilter) return item.quality_status === statusFilter;
         return true;
       })
@@ -78,8 +78,8 @@ export default function InventoryPage() {
     
     switch (sortBy) {
       case 'name':
-        aValue = a.product?.name || '';
-        bValue = b.product?.name || '';
+        aValue = a.product?.product_name || a.product?.name || '';
+        bValue = b.product?.product_name || b.product?.name || '';
         break;
       case 'quantity':
         aValue = a.available_quantity;
@@ -360,8 +360,10 @@ export default function InventoryPage() {
                 </tr>
               ) : (
                 sortedItems.map((item) => {
-                  const isCritical = item.available_quantity <= (item.product?.critical_stock_level || 0);
-                  const isLowStock = item.available_quantity <= (item.product?.minimum_stock_level || 0);
+                  const criticalLevel = item.product?.critical_stock_level || 0;
+                  const minimumLevel = item.product?.minimum_stock_level || 0;
+                  const isCritical = item.available_quantity <= criticalLevel;
+                  const isLowStock = item.available_quantity <= minimumLevel;
                   
                   return (
                     <tr key={item.inventory_item_id || item.id} className={`hover:bg-gray-50 ${isCritical ? 'bg-red-50' : ''}`}>
@@ -372,20 +374,25 @@ export default function InventoryPage() {
                           )}
                           <div>
                             <div className="text-sm font-medium text-gray-900">
-                              {item.product?.name}
+                              {item.product?.product_name || item.product?.name}
                             </div>
                             <div className="text-sm text-gray-500">
-                              Code: {item.product?.code}
+                              Code: {item.product?.product_code || item.product?.code}
                             </div>
-                            <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getCategoryColor(item.product?.category || '')}`}>
-                              {item.product?.category?.replace('_', ' ')}
+                            <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getCategoryColor(item.product?.product_type || item.product?.category || '')}`}>
+                              {(item.product?.product_type || item.product?.category)?.replace('_', ' ')}
                             </span>
                           </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-sm text-gray-900">{item.warehouse?.name}</div>
-                        <div className="text-sm text-gray-500">{item.warehouse?.type?.replace('_', ' ')}</div>
+                        <div className="text-sm text-gray-900">{item.warehouse?.warehouse_name || item.warehouse?.name}</div>
+                        <div className="text-sm text-gray-500">{(item.warehouse?.warehouse_type || item.warehouse?.type)?.replace('_', ' ')}</div>
+                        {item.warehouse?.location && (
+                          <div className="text-xs text-gray-400">
+                            Location: {item.warehouse.location}
+                          </div>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <div className="space-y-1">
@@ -400,8 +407,8 @@ export default function InventoryPage() {
                           </div>
                           {item.product && (
                             <div className="text-xs text-gray-400">
-                              Min: {formatNumber(item.product.minimum_stock_level)} | 
-                              Critical: {formatNumber(item.product.critical_stock_level)}
+                              Min: {formatNumber(minimumLevel)} | 
+                              Critical: {formatNumber(criticalLevel)}
                             </div>
                           )}
                         </div>

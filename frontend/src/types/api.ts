@@ -53,6 +53,7 @@ export interface RefreshResponse {
 
 // Master Data Types
 export type ProductCategory = 'RAW_MATERIALS' | 'SEMI_FINISHED' | 'FINISHED_PRODUCTS' | 'PACKAGING';
+export type ProductType = 'RAW_MATERIAL' | 'SEMI_FINISHED' | 'FINISHED_PRODUCT' | 'PACKAGING';
 export type WarehouseType = 'RAW_MATERIALS' | 'SEMI_FINISHED' | 'FINISHED_PRODUCTS' | 'PACKAGING';
 export type UnitOfMeasure = 'PIECES' | 'METERS' | 'KILOGRAMS' | 'LITERS' | 'BOXES';
 
@@ -77,13 +78,15 @@ export interface Product {
 }
 
 export interface CreateProductRequest {
-  code: string;
-  name: string;
+  product_code: string;
+  product_name: string;
   description?: string;
-  category: ProductCategory;
-  unit_of_measure: UnitOfMeasure;
-  minimum_stock_level: number;
-  critical_stock_level: number;
+  product_type: ProductType;
+  unit_of_measure: string;
+  minimum_stock_level?: number;
+  critical_stock_level?: number;
+  standard_cost?: number;
+  specifications?: string;
 }
 
 export interface Warehouse {
@@ -116,7 +119,6 @@ export interface Supplier {
   email?: string;
   phone?: string;
   address?: string;
-  tax_number?: string;
   payment_terms?: string;
   is_active: boolean;
   created_at: string;
@@ -130,7 +132,6 @@ export interface CreateSupplierRequest {
   email?: string;
   phone?: string;
   address?: string;
-  tax_number?: string;
   payment_terms?: string;
 }
 
@@ -164,12 +165,23 @@ export interface InventoryItem {
     product_name: string;
     product_type: string;
     unit_of_measure: string;
+    // Compatibility fields
+    code?: string;
+    name?: string;
+    category?: ProductCategory;
+    minimum_stock_level?: number;
+    critical_stock_level?: number;
   };
   warehouse?: {
     warehouse_id: number;
     warehouse_code: string;
     warehouse_name: string;
     warehouse_type: string;
+    // Compatibility fields
+    code?: string;
+    name?: string;
+    type?: WarehouseType;
+    location?: string;
   };
   supplier?: Supplier;
 }
@@ -281,6 +293,173 @@ export interface SupplierFilters {
   page_size?: number;
   search?: string;
   is_active?: boolean;
+}
+
+// BOM (Bill of Materials) Types
+export interface BOMItem {
+  bom_item_id: number;
+  bom_id: number;
+  product_id: number;
+  quantity: number;
+  unit_cost?: number;
+  total_cost?: number;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+  
+  // Related objects (when included)
+  product?: {
+    product_id: number;
+    product_code: string;
+    product_name: string;
+    product_type: string;
+    unit_of_measure: string;
+  };
+}
+
+export interface BOM {
+  bom_id: number;
+  id?: number; // For compatibility
+  product_id: number;
+  bom_code: string;
+  code?: string; // For compatibility
+  bom_name: string;
+  name?: string; // For compatibility
+  description?: string;
+  version: string;
+  total_cost?: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  
+  // Related objects
+  product?: {
+    product_id: number;
+    product_code: string;
+    product_name: string;
+    product_type: string;
+    unit_of_measure: string;
+  };
+  bom_items?: BOMItem[];
+}
+
+export interface CreateBOMRequest {
+  product_id: number;
+  bom_code: string;
+  bom_name: string;
+  description?: string;
+  version: string;
+  bom_items: {
+    product_id: number;
+    quantity: number;
+    notes?: string;
+  }[];
+}
+
+export interface UpdateBOMRequest {
+  bom_code?: string;
+  bom_name?: string;
+  description?: string;
+  version?: string;
+  bom_items?: {
+    product_id: number;
+    quantity: number;
+    notes?: string;
+  }[];
+}
+
+export interface BOMCostCalculation {
+  bom_id: number;
+  total_cost: number;
+  detailed_costs: {
+    bom_item_id: number;
+    product_id: number;
+    product_name: string;
+    quantity: number;
+    unit_cost: number;
+    total_cost: number;
+  }[];
+}
+
+// Production Order Types
+export type ProductionOrderStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+
+export interface ProductionOrder {
+  production_order_id: number;
+  id?: number; // For compatibility
+  order_number: string;
+  bom_id: number;
+  product_id: number;
+  quantity_to_produce: number;
+  quantity_produced?: number;
+  status: ProductionOrderStatus;
+  priority?: string;
+  planned_start_date?: string;
+  planned_end_date?: string;
+  actual_start_date?: string;
+  actual_end_date?: string;
+  notes?: string;
+  created_by: number;
+  created_at: string;
+  updated_at: string;
+  
+  // Related objects
+  bom?: {
+    bom_id: number;
+    bom_code: string;
+    bom_name: string;
+    version: string;
+  };
+  product?: {
+    product_id: number;
+    product_code: string;
+    product_name: string;
+    product_type: string;
+    unit_of_measure: string;
+  };
+  created_by_user?: {
+    user_id: number;
+    username: string;
+    full_name: string;
+  };
+}
+
+export interface CreateProductionOrderRequest {
+  bom_id: number;
+  quantity_to_produce: number;
+  priority?: string;
+  planned_start_date?: string;
+  planned_end_date?: string;
+  notes?: string;
+}
+
+export interface UpdateProductionOrderRequest {
+  quantity_to_produce?: number;
+  status?: ProductionOrderStatus;
+  priority?: string;
+  planned_start_date?: string;
+  planned_end_date?: string;
+  actual_start_date?: string;
+  actual_end_date?: string;
+  notes?: string;
+}
+
+export interface BOMFilters {
+  page?: number;
+  page_size?: number;
+  search?: string;
+  product_id?: number;
+  is_active?: boolean;
+}
+
+export interface ProductionOrderFilters {
+  page?: number;
+  page_size?: number;
+  search?: string;
+  status?: ProductionOrderStatus;
+  bom_id?: number;
+  product_id?: number;
+  created_by?: number;
 }
 
 // Error Types
