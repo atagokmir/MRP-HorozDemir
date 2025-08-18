@@ -211,8 +211,11 @@ def get_inventory_availability(
         total_value += item_quantity * item_unit_cost
         
         # Check for expired items
-        if item.expiry_date and item.expiry_date <= date.today():
-            expired_quantity += item_quantity
+        if item.expiry_date:
+            # Handle both datetime and date comparison
+            expiry_date = item.expiry_date.date() if hasattr(item.expiry_date, 'date') else item.expiry_date
+            if expiry_date <= date.today():
+                expired_quantity += item_quantity
         
         # Track date range
         if oldest_batch_date is None or item.entry_date < oldest_batch_date:
@@ -315,13 +318,29 @@ def stock_in_operation(
             "inventory_item"
         )
     
+    # Use provided entry_date or default to today
+    entry_date = stock_in_request.entry_date or date.today()
+    # Convert date to datetime for database storage
+    if isinstance(entry_date, date) and not isinstance(entry_date, datetime):
+        entry_datetime = datetime.combine(entry_date, datetime.min.time())
+    else:
+        entry_datetime = entry_date
+    
+    # Handle expiry_date conversion
+    expiry_datetime = None
+    if stock_in_request.expiry_date:
+        if isinstance(stock_in_request.expiry_date, date) and not isinstance(stock_in_request.expiry_date, datetime):
+            expiry_datetime = datetime.combine(stock_in_request.expiry_date, datetime.min.time())
+        else:
+            expiry_datetime = stock_in_request.expiry_date
+    
     # Create new inventory item
     new_item = InventoryItemModel(
         product_id=stock_in_request.product_id,
         warehouse_id=stock_in_request.warehouse_id,
         batch_number=stock_in_request.batch_number,
-        entry_date=datetime.now(),
-        expiry_date=stock_in_request.expiry_date,
+        entry_date=entry_datetime,
+        expiry_date=expiry_datetime,
         quantity_in_stock=stock_in_request.quantity,
         reserved_quantity=Decimal('0'),
         unit_cost=stock_in_request.unit_cost,
@@ -447,7 +466,7 @@ def stock_out_operation(
             unit_cost=item.unit_cost,
             reference_type=None,
             reference_id=None,
-            notes=f"Stock out operation - {stock_out_request.reason}. Reference: {stock_out_request.reference_number or 'N/A'}",
+            notes=f"Stock out operation - {stock_out_request.reference_type or 'Manual'}. Reference: {stock_out_request.reference_id or 'N/A'}",
             created_by=current_user.username,
             created_at=datetime.now(),
             updated_at=datetime.now()
@@ -471,7 +490,7 @@ def stock_out_operation(
     )
 
 
-@router.post("/adjust")  # TODO: response_model=MessageResponse)
+@router.post("/adjustment")  # TODO: response_model=MessageResponse)
 def stock_adjustment(
     adjustment_request: StockAdjustmentRequest,
     session: Session = Depends(get_db),
@@ -482,8 +501,153 @@ def stock_adjustment(
     
     Allows positive or negative adjustments with audit trail.
     """
-    # TODO: Implement stock adjustment
-    return MessageResponse(message="Stock adjustment completed successfully")
+    # Validate product and warehouse exist
+    product_query = select(Product).where(Product.product_id == adjustment_request.product_id)
+    product_result = session.execute(product_query)
+    product = product_result.scalar_one_or_none()
+    
+    if not product:
+        raise NotFoundError("Product", adjustment_request.product_id)
+    
+    warehouse_query = select(Warehouse).where(Warehouse.warehouse_id == adjustment_request.warehouse_id)
+    warehouse_result = session.execute(warehouse_query)
+    warehouse = warehouse_result.scalar_one_or_none()
+    
+    if not warehouse:
+        raise NotFoundError("Warehouse", adjustment_request.warehouse_id)
+    
+    if adjustment_request.adjustment_quantity == 0:
+        raise ValidationError("Adjustment quantity cannot be zero")
+    
+    # For positive adjustments, create new inventory item
+    if adjustment_request.adjustment_quantity > 0:
+        # Generate a system batch number for adjustments
+        batch_number = f"ADJ-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        
+        new_item = InventoryItemModel(
+            product_id=adjustment_request.product_id,
+            warehouse_id=adjustment_request.warehouse_id,
+            batch_number=batch_number,
+            entry_date=datetime.now(),
+            expiry_date=None,
+            quantity_in_stock=adjustment_request.adjustment_quantity,
+            reserved_quantity=Decimal('0'),
+            unit_cost=Decimal('0'),  # Adjustments have zero cost
+            supplier_id=None,
+            purchase_order_id=None,
+            quality_status='APPROVED',
+            notes=f"Stock adjustment: {adjustment_request.reason}. {adjustment_request.notes or ''}",
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        session.add(new_item)
+        session.flush()
+        
+        # Create stock movement record
+        stock_movement = StockMovementModel(
+            inventory_item_id=new_item.inventory_item_id,
+            movement_type='ADJUSTMENT',
+            movement_date=datetime.now(),
+            quantity=adjustment_request.adjustment_quantity,
+            unit_cost=Decimal('0'),
+            reference_type='ADJUSTMENT',
+            reference_id=None,
+            notes=f"Stock adjustment (+): {adjustment_request.reason}",
+            created_by=current_user.username,
+            created_at=datetime.now(),
+            updated_at=datetime.now()
+        )
+        
+        session.add(stock_movement)
+        session.commit()
+        
+        return MessageResponse(
+            message=f"Stock adjustment completed successfully. Added {adjustment_request.adjustment_quantity} units."
+        )
+    
+    # For negative adjustments, use FIFO logic to reduce stock
+    else:
+        adjustment_quantity = abs(adjustment_request.adjustment_quantity)
+        
+        # Get available inventory items using FIFO ordering
+        fifo_query = (
+            select(InventoryItemModel)
+            .where(
+                and_(
+                    InventoryItemModel.product_id == adjustment_request.product_id,
+                    InventoryItemModel.warehouse_id == adjustment_request.warehouse_id,
+                    InventoryItemModel.quality_status == 'APPROVED',
+                    InventoryItemModel.quantity_in_stock > InventoryItemModel.reserved_quantity
+                )
+            )
+            .order_by(
+                InventoryItemModel.entry_date.asc(),
+                InventoryItemModel.inventory_item_id.asc()
+            )
+        )
+        
+        result = session.execute(fifo_query)
+        available_items = result.scalars().all()
+        
+        # Check if sufficient stock is available
+        total_available = sum(Decimal(str(item.quantity_in_stock or 0)) - Decimal(str(item.reserved_quantity or 0)) for item in available_items)
+        
+        if total_available < adjustment_quantity:
+            raise InsufficientStockError(
+                f"Insufficient stock for adjustment. Required: {adjustment_quantity}, Available: {total_available}",
+                product_id=adjustment_request.product_id,
+                required=float(adjustment_quantity),
+                available=float(total_available)
+            )
+        
+        # Perform FIFO consumption for negative adjustment
+        remaining_to_adjust = adjustment_quantity
+        movements_created = []
+        
+        for item in available_items:
+            if remaining_to_adjust <= 0:
+                break
+            
+            available_in_batch = Decimal(str(item.quantity_in_stock or 0)) - Decimal(str(item.reserved_quantity or 0))
+            
+            if available_in_batch <= 0:
+                continue
+            
+            # Calculate how much to adjust from this batch
+            adjust_from_batch = min(remaining_to_adjust, available_in_batch)
+            
+            # Update inventory item
+            item.quantity_in_stock -= adjust_from_batch
+            item.updated_at = datetime.now()
+            
+            # Create stock movement record
+            stock_movement = StockMovementModel(
+                inventory_item_id=item.inventory_item_id,
+                movement_type='ADJUSTMENT',
+                movement_date=datetime.now(),
+                quantity=-adjust_from_batch,  # Negative for adjustment down
+                unit_cost=item.unit_cost,
+                reference_type='ADJUSTMENT',
+                reference_id=None,
+                notes=f"Stock adjustment (-): {adjustment_request.reason}",
+                created_by=current_user.username,
+                created_at=datetime.now(),
+                updated_at=datetime.now()
+            )
+            
+            session.add(stock_movement)
+            movements_created.append(stock_movement)
+            
+            remaining_to_adjust -= adjust_from_batch
+        
+        # Commit all changes
+        session.commit()
+        
+        return MessageResponse(
+            message=f"Stock adjustment completed successfully. "
+                    f"Reduced {adjustment_quantity} units from {len(movements_created)} batches."
+        )
 
 
 @router.post("/transfer")  # TODO: response_model=MessageResponse)

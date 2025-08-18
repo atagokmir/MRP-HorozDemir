@@ -65,8 +65,8 @@ export class APIClient {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${refreshToken}`,
       },
+      body: JSON.stringify({ refresh_token: refreshToken }),
     });
 
     const data = await response.json();

@@ -30,6 +30,7 @@ class StockInRequest(BaseSchema):
     quantity: Decimal = Field(..., gt=0, description="Quantity to add")
     unit_cost: Decimal = Field(..., ge=0, description="Cost per unit")
     batch_number: str = Field(..., description="Batch/lot number")
+    entry_date: Optional[date] = Field(None, description="Entry date (defaults to today)")
     
     @validator('batch_number')
     def validate_batch_number_field(cls, v):
@@ -50,11 +51,22 @@ class StockInRequest(BaseSchema):
         """Validate unit cost is non-negative."""
         return validate_non_negative_decimal(v, "Unit cost")
     
+    @validator('entry_date')
+    def validate_entry_date(cls, v):
+        """Validate entry date is not in the future."""
+        if v and v > date.today():
+            raise ValueError('Entry date cannot be in the future')
+        return v
+    
     @validator('expiry_date')
-    def validate_expiry_date(cls, v):
-        """Validate expiry date is in the future."""
-        if v and v <= date.today():
-            raise ValueError('Expiry date must be in the future')
+    def validate_expiry_date(cls, v, values):
+        """Validate expiry date is in the future and after entry date."""
+        if v:
+            if v <= date.today():
+                raise ValueError('Expiry date must be in the future')
+            entry_date = values.get('entry_date')
+            if entry_date and v <= entry_date:
+                raise ValueError('Expiry date must be after entry date')
         return v
 
 
@@ -63,8 +75,8 @@ class StockOutRequest(BaseSchema):
     product_id: int = Field(..., description="Product ID")
     warehouse_id: int = Field(..., description="Warehouse ID")
     quantity: Decimal = Field(..., gt=0, description="Quantity to remove")
-    reason: str = Field(..., min_length=1, max_length=200, description="Reason for stock out")
-    reference_number: Optional[str] = Field(None, max_length=50, description="Reference number")
+    reference_type: Optional[str] = Field(None, max_length=200, description="Type of reference (e.g., Production Order, Sale)")
+    reference_id: Optional[str] = Field(None, max_length=50, description="Reference ID")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
     
     @validator('quantity')
@@ -75,10 +87,10 @@ class StockOutRequest(BaseSchema):
 
 class StockAdjustmentRequest(BaseSchema):
     """Stock adjustment operation request."""
-    inventory_item_id: int = Field(..., description="Inventory item ID")
+    product_id: int = Field(..., description="Product ID")
+    warehouse_id: int = Field(..., description="Warehouse ID")
     adjustment_quantity: Decimal = Field(..., description="Adjustment quantity (can be negative)")
     reason: str = Field(..., min_length=1, max_length=200, description="Reason for adjustment")
-    reference_number: Optional[str] = Field(None, max_length=50, description="Reference number")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
 
 
