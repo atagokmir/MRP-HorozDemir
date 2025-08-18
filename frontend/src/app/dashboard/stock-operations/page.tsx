@@ -568,7 +568,7 @@ export default function StockOperationsPage() {
                     <span className="text-sm text-gray-500 block mb-2">FIFO Batches:</span>
                     <div className="space-y-2">
                       {stockAvailability.fifo_batches.slice(0, 3).map((batch, index) => (
-                        <div key={index} className="bg-gray-50 p-2 rounded text-sm">
+                        <div key={`batch-${batch.batch_number}-${index}`} className="bg-gray-50 p-2 rounded text-sm">
                           <div className="flex justify-between">
                             <span>Batch: {batch.batch_number}</span>
                             <span>{formatNumber(batch.available_quantity)}</span>

@@ -71,7 +71,7 @@ export default function SuppliersPage() {
 
       if (editingSupplier) {
         await updateSupplier.mutateAsync({
-          id: editingSupplier.id,
+          id: editingSupplier.supplier_id || editingSupplier.id,
           data: cleanedData,
         });
       } else {
@@ -99,9 +99,9 @@ export default function SuppliersPage() {
   };
 
   const handleDelete = async (supplier: Supplier) => {
-    if (confirm(`Are you sure you want to delete "${supplier.name}"?`)) {
+    if (confirm(`Are you sure you want to delete "${supplier.supplier_name || supplier.name}"?`)) {
       try {
-        await deleteSupplier.mutateAsync(supplier.id);
+        await deleteSupplier.mutateAsync(supplier.supplier_id || supplier.id);
       } catch (error) {
         alert(handleAPIError(error));
       }

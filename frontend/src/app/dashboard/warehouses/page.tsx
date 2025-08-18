@@ -57,7 +57,7 @@ export default function WarehousesPage() {
     try {
       if (editingWarehouse) {
         await updateWarehouse.mutateAsync({
-          id: editingWarehouse.id,
+          id: editingWarehouse.warehouse_id || editingWarehouse.id,
           data: formData,
         });
       } else {
@@ -82,9 +82,9 @@ export default function WarehousesPage() {
   };
 
   const handleDelete = async (warehouse: Warehouse) => {
-    if (confirm(`Are you sure you want to delete "${warehouse.name}"?`)) {
+    if (confirm(`Are you sure you want to delete "${warehouse.warehouse_name || warehouse.name}"?`)) {
       try {
-        await deleteWarehouse.mutateAsync(warehouse.id);
+        await deleteWarehouse.mutateAsync(warehouse.warehouse_id || warehouse.id);
       } catch (error) {
         alert(handleAPIError(error));
       }

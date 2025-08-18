@@ -16,6 +16,7 @@ import {
 
 type BOMFormData = Omit<CreateBOMRequest, 'bom_items'> & {
   bom_items: Array<{
+    id?: string;
     product_id: number;
     quantity: number;
     notes?: string;
@@ -117,7 +118,8 @@ export default function BOMPage() {
       bom_name: bom.bom_name || bom.name || '',
       description: bom.description || '',
       version: bom.version,
-      bom_items: bom.bom_items?.map(item => ({
+      bom_items: bom.bom_items?.map((item, index) => ({
+        id: `${item.product_id}-${index}-${Date.now()}`,
         product_id: item.product_id,
         quantity: item.quantity,
         notes: item.notes,
@@ -162,9 +164,15 @@ export default function BOMPage() {
   };
 
   const addBOMItem = () => {
+    const newItem = { 
+      id: `new-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      product_id: 0, 
+      quantity: 1, 
+      notes: '' 
+    };
     setFormData({
       ...formData,
-      bom_items: [...formData.bom_items, { product_id: 0, quantity: 1, notes: '' }],
+      bom_items: [...formData.bom_items, newItem],
     });
   };
 
@@ -449,7 +457,7 @@ export default function BOMPage() {
                   </div>
 
                   {formData.bom_items.map((item, index) => (
-                    <div key={index} className="bg-gray-50 p-4 rounded-md mb-4">
+                    <div key={item.id || `item-${index}`} className="bg-gray-50 p-4 rounded-md mb-4">
                       <div className="grid grid-cols-4 gap-4">
                         <div className="col-span-2">
                           <label className="block text-sm font-medium text-gray-700">Product</label>
@@ -582,7 +590,7 @@ export default function BOMPage() {
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
                         {viewingBOM.bom_items?.map((item, index) => (
-                          <tr key={index}>
+                          <tr key={`view-item-${item.product_id}-${index}`}>
                             <td className="px-4 py-2 text-sm text-gray-900">
                               {item.product?.product_name} ({item.product?.product_code})
                             </td>
@@ -643,7 +651,7 @@ export default function BOMPage() {
                       </thead>
                       <tbody className="bg-white divide-y divide-gray-200">
                         {costCalculation.detailed_costs.map((cost, index) => (
-                          <tr key={index}>
+                          <tr key={`cost-${cost.product_name}-${index}`}>
                             <td className="px-4 py-2 text-sm text-gray-900">
                               {cost.product_name}
                             </td>

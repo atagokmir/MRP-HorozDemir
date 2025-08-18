@@ -22,14 +22,14 @@ import { NotificationCenter } from './notifications';
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
-  { name: 'Inventory', href: '/inventory', icon: CubeIcon },
-  { name: 'Products', href: '/products', icon: ClipboardDocumentListIcon },
-  { name: 'Warehouses', href: '/warehouses', icon: BuildingStorefrontIcon },
-  { name: 'Suppliers', href: '/suppliers', icon: TruckIcon },
-  { name: 'BOM', href: '/bom', icon: DocumentDuplicateIcon },
-  { name: 'Production Orders', href: '/production-orders', icon: CogIcon },
-  { name: 'Stock Operations', href: '/stock-operations', icon: UsersIcon },
-  { name: 'Reports', href: '/reports', icon: ChartBarIcon },
+  { name: 'Inventory', href: '/dashboard/inventory', icon: CubeIcon },
+  { name: 'Products', href: '/dashboard/products', icon: ClipboardDocumentListIcon },
+  { name: 'Warehouses', href: '/dashboard/warehouses', icon: BuildingStorefrontIcon },
+  { name: 'Suppliers', href: '/dashboard/suppliers', icon: TruckIcon },
+  { name: 'BOM', href: '/dashboard/bom', icon: DocumentDuplicateIcon },
+  { name: 'Production Orders', href: '/dashboard/production-orders', icon: CogIcon },
+  { name: 'Stock Operations', href: '/dashboard/stock-operations', icon: UsersIcon },
+  { name: 'Reports', href: '/dashboard/reports', icon: ChartBarIcon },
 ];
 
 export function Navigation() {

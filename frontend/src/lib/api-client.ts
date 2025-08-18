@@ -147,6 +147,13 @@ export class APIClient {
             normalized.category = item.product_type;
           }
           
+          // Supplier field normalization (top-level)
+          if (item.supplier_id) {
+            normalized.id = item.supplier_id;
+            normalized.code = item.supplier_code;
+            normalized.name = item.supplier_name;
+          }
+          
           // Inventory item field normalization
           if (item.inventory_item_id) {
             normalized.id = item.inventory_item_id;

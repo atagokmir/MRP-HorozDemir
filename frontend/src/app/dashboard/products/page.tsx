@@ -167,9 +167,9 @@ export default function ProductsPage() {
   };
 
   const handleDelete = async (product: Product) => {
-    if (confirm(`Are you sure you want to delete "${product.name}"?`)) {
+    if (confirm(`Are you sure you want to delete "${product.product_name || product.name}"?`)) {
       try {
-        await deleteProduct.mutateAsync(product.id);
+        await deleteProduct.mutateAsync(product.product_id || product.id);
       } catch (error) {
         alert(handleAPIError(error));
       }

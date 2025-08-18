@@ -112,8 +112,11 @@ export interface CreateWarehouseRequest {
 }
 
 export interface Supplier {
+  supplier_id?: number;
   id: number;
+  supplier_code?: string;
   code: string;
+  supplier_name?: string;
   name: string;
   contact_person?: string;
   email?: string;
