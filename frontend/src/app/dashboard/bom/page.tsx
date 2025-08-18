@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useBOMs, useCreateBOM, useUpdateBOM, useDeleteBOM, useBOMCostCalculation } from '@/hooks/use-bom';
 import { useProducts } from '@/hooks/use-products';
-import { BOM, CreateBOMRequest, Product } from '@/types/api';
+import { BOM, CreateBOMRequest, Product, ProductCategory, UnitOfMeasure } from '@/types/api';
 import { formatDate, handleAPIError, debounce } from '@/lib/utils';
 import { 
   PlusIcon, 
@@ -97,8 +97,12 @@ export default function BOMPage() {
       };
 
       if (editingBOM) {
+        const bomId = editingBOM.bom_id ?? editingBOM.id;
+        if (!bomId) {
+          throw new Error('Invalid BOM ID for update operation');
+        }
         await updateBOM.mutateAsync({
-          id: editingBOM.bom_id || editingBOM.id!,
+          id: bomId,
           data: submitData,
         });
       } else {
@@ -114,17 +118,30 @@ export default function BOMPage() {
     setEditingBOM(bom);
     setFormData({
       product_id: bom.product_id,
-      bom_code: bom.bom_code || bom.code || '',
-      bom_name: bom.bom_name || bom.name || '',
-      description: bom.description || '',
+      bom_code: bom.bom_code ?? bom.code ?? '',
+      bom_name: bom.bom_name ?? bom.name ?? '',
+      description: bom.description ?? '',
       version: bom.version,
       bom_items: bom.bom_items?.map((item, index) => ({
         id: `${item.product_id}-${index}-${Date.now()}`,
         product_id: item.product_id,
         quantity: item.quantity,
-        notes: item.notes,
-        product: item.product,
-      })) || [],
+        notes: item.notes ?? '',
+        product: item.product ? {
+          ...item.product,
+          product_type: item.product.product_type as ProductCategory,
+          id: item.product.product_id,
+          code: item.product.product_code,
+          name: item.product.product_name,
+          category: item.product.product_type as ProductCategory,
+          unit_of_measure: item.product.unit_of_measure as UnitOfMeasure,
+          minimum_stock_level: 0,
+          critical_stock_level: 0,
+          is_active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } : undefined,
+      })) ?? [],
     });
     setFormErrors({});
     setIsModalOpen(true);
@@ -140,9 +157,17 @@ export default function BOMPage() {
   };
 
   const handleDelete = async (bom: BOM) => {
-    if (confirm(`Are you sure you want to delete BOM "${bom.bom_name || bom.name}"?`)) {
+    const bomName = bom.bom_name ?? bom.name ?? 'Unknown BOM';
+    const bomId = bom.bom_id ?? bom.id;
+    
+    if (!bomId) {
+      alert('Invalid BOM ID for delete operation');
+      return;
+    }
+    
+    if (confirm(`Are you sure you want to delete BOM "${bomName}"?`)) {
       try {
-        await deleteBOM.mutateAsync(bom.bom_id || bom.id!);
+        await deleteBOM.mutateAsync(bomId);
       } catch (error) {
         alert(handleAPIError(error));
       }
@@ -165,7 +190,7 @@ export default function BOMPage() {
 
   const addBOMItem = () => {
     const newItem = { 
-      id: `new-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      id: `new-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
       product_id: 0, 
       quantity: 1, 
       notes: '' 
@@ -272,41 +297,46 @@ export default function BOMPage() {
                   </td>
                 </tr>
               ) : (
-                data?.items?.map((bom) => (
-                  <tr key={bom.bom_id || bom.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4">
-                      <div>
-                        <div className="text-sm font-medium text-gray-900">
-                          {bom.bom_name || bom.name}
+                data?.items?.map((bom) => {
+                  const bomId = bom.bom_id ?? bom.id;
+                  const bomName = bom.bom_name ?? bom.name ?? 'Unknown BOM';
+                  const bomCode = bom.bom_code ?? bom.code ?? 'No Code';
+                  
+                  return (
+                    <tr key={bomId ?? `bom-fallback-${bom.product_id}-${bom.version}`} className="hover:bg-gray-50">
+                      <td className="px-6 py-4">
+                        <div>
+                          <div className="text-sm font-medium text-gray-900">
+                            {bomName}
+                          </div>
+                          <div className="text-sm text-gray-500">
+                            Code: {bomCode}
+                          </div>
+                          {bom.description && (
+                            <div className="text-sm text-gray-400 truncate max-w-xs">
+                              {bom.description}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm text-gray-900">
+                          {bom.product?.product_name ?? 'Unknown Product'}
                         </div>
                         <div className="text-sm text-gray-500">
-                          Code: {bom.bom_code || bom.code}
+                          {bom.product?.product_code ?? 'No Code'}
                         </div>
-                        {bom.description && (
-                          <div className="text-sm text-gray-400 truncate max-w-xs">
-                            {bom.description}
-                          </div>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm text-gray-900">
-                        {bom.product?.product_name}
-                      </div>
-                      <div className="text-sm text-gray-500">
-                        {bom.product?.product_code}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {bom.version}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {bom.bom_items?.length || 0} items
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      {formatDate(bom.created_at)}
-                    </td>
-                    <td className="px-6 py-4 text-right text-sm font-medium space-x-2">
+                        </td>
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        {bom.version}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        {bom.bom_items?.length ?? 0} items
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-500">
+                        {formatDate(bom.created_at)}
+                      </td>
+                      <td className="px-6 py-4 text-right text-sm font-medium space-x-2">
                       <button
                         onClick={() => handleView(bom)}
                         className="text-blue-600 hover:text-blue-900"
@@ -315,7 +345,14 @@ export default function BOMPage() {
                         <EyeIcon className="h-4 w-4" />
                       </button>
                       <button
-                        onClick={() => handleViewCost(bom.bom_id || bom.id!)}
+                        onClick={() => {
+                          const bomId = bom.bom_id ?? bom.id;
+                          if (bomId) {
+                            handleViewCost(bomId);
+                          } else {
+                            alert('Invalid BOM ID for cost calculation');
+                          }
+                        }}
                         className="text-green-600 hover:text-green-900"
                         title="View Cost Calculation"
                       >
@@ -337,7 +374,8 @@ export default function BOMPage() {
                       </button>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -389,7 +427,7 @@ export default function BOMPage() {
                       <option value={0}>Select Product</option>
                       {products.map((product) => (
                         <option key={product.product_id} value={product.product_id}>
-                          {product.product_name || product.name} ({product.product_code || product.code})
+                          {product.product_name ?? product.name ?? 'Unknown Product'} ({product.product_code ?? product.code ?? 'No Code'})
                         </option>
                       ))}
                     </select>
@@ -469,7 +507,7 @@ export default function BOMPage() {
                             <option value={0}>Select Product</option>
                             {products.map((product) => (
                               <option key={product.product_id} value={product.product_id}>
-                                {product.product_name || product.name} ({product.product_code || product.code})
+                                {product.product_name ?? product.name ?? 'Unknown Product'} ({product.product_code ?? product.code ?? 'No Code'})
                               </option>
                             ))}
                           </select>
@@ -504,7 +542,7 @@ export default function BOMPage() {
                         <label className="block text-sm font-medium text-gray-700">Notes</label>
                         <input
                           type="text"
-                          value={item.notes || ''}
+                          value={item.notes ?? ''}
                           onChange={(e) => updateBOMItem(index, 'notes', e.target.value)}
                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                         />
@@ -548,14 +586,14 @@ export default function BOMPage() {
           <div className="relative top-20 mx-auto p-5 border w-full max-w-3xl shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
-                BOM Details: {viewingBOM.bom_name || viewingBOM.name}
+                BOM Details: {viewingBOM.bom_name ?? viewingBOM.name ?? 'Unknown BOM'}
               </h3>
               
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <p className="text-sm font-medium text-gray-700">BOM Code</p>
-                    <p className="text-sm text-gray-900">{viewingBOM.bom_code || viewingBOM.code}</p>
+                    <p className="text-sm text-gray-900">{viewingBOM.bom_code ?? viewingBOM.code ?? 'No Code'}</p>
                   </div>
                   <div>
                     <p className="text-sm font-medium text-gray-700">Version</p>
@@ -566,7 +604,7 @@ export default function BOMPage() {
                 <div>
                   <p className="text-sm font-medium text-gray-700">Product</p>
                   <p className="text-sm text-gray-900">
-                    {viewingBOM.product?.product_name} ({viewingBOM.product?.product_code})
+                    {viewingBOM.product?.product_name ?? 'Unknown Product'} ({viewingBOM.product?.product_code ?? 'No Code'})
                   </p>
                 </div>
 
@@ -592,16 +630,16 @@ export default function BOMPage() {
                         {viewingBOM.bom_items?.map((item, index) => (
                           <tr key={`view-item-${item.product_id}-${index}`}>
                             <td className="px-4 py-2 text-sm text-gray-900">
-                              {item.product?.product_name} ({item.product?.product_code})
+                              {item.product?.product_name ?? 'Unknown Product'} ({item.product?.product_code ?? 'No Code'})
                             </td>
                             <td className="px-4 py-2 text-sm text-gray-900">
                               {item.quantity}
                             </td>
                             <td className="px-4 py-2 text-sm text-gray-900">
-                              {item.notes || '-'}
+                              {item.notes ?? '-'}
                             </td>
                           </tr>
-                        ))}
+                        )) ?? []}
                       </tbody>
                     </table>
                   </div>
