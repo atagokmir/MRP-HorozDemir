@@ -138,6 +138,7 @@ export default function StockOperationsPage() {
       };
 
       const result = await stockOutMutation.mutateAsync(data);
+      
       setSuccessMessage(
         `Successfully removed ${formatNumber(data.quantity)} units from stock. ` +
         `Total cost: ${formatCurrency(result.total_cost)}`
