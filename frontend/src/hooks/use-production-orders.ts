@@ -13,7 +13,7 @@ export function useProductionOrders(filters?: ProductionOrderFilters) {
     queryKey: ['production-orders', filters],
     queryFn: async () => {
       const response = await apiClient.get<PaginatedResponse<ProductionOrder>>(
-        '/production-orders',
+        '/production-orders/',
         filters
       );
       return response.data;
@@ -37,7 +37,7 @@ export function useCreateProductionOrder() {
 
   return useMutation({
     mutationFn: async (data: CreateProductionOrderRequest) => {
-      const response = await apiClient.post<ProductionOrder>('/production-orders', data);
+      const response = await apiClient.post<ProductionOrder>('/production-orders/', data);
       return response.data;
     },
     onSuccess: () => {

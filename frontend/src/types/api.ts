@@ -483,11 +483,13 @@ export interface ProductionOrder {
 }
 
 export interface CreateProductionOrderRequest {
+  product_id: number;
   bom_id: number;
-  quantity_to_produce: number;
-  priority?: string;
+  warehouse_id: number;
+  planned_quantity: number;
+  priority?: number;
   planned_start_date?: string;
-  planned_end_date?: string;
+  planned_completion_date?: string;
   notes?: string;
 }
 

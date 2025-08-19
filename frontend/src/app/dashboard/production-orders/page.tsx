@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { useProductionOrders, useCreateProductionOrder, useUpdateProductionOrder, useDeleteProductionOrder } from '@/hooks/use-production-orders';
 import { useBOMs } from '@/hooks/use-bom';
+import { useProducts } from '@/hooks/use-products';
+import { useWarehouses } from '@/hooks/use-warehouses';
 import { ProductionOrder, CreateProductionOrderRequest, ProductionOrderStatus } from '@/types/api';
 import { formatDate, handleAPIError, debounce } from '@/lib/utils';
 import { 
@@ -72,19 +74,24 @@ export default function ProductionOrdersPage() {
   const { data: bomsData, isLoading: isLoadingBOMs, error: bomsError } = useBOMs({ page_size: 1000 });
   const boms = bomsData?.items || [];
 
-  // Debug logging
-  console.log('BOMs data:', { bomsData, boms, isLoadingBOMs, bomsError });
+  const { data: productsData } = useProducts({ page_size: 1000 });
+  const products = productsData?.items || [];
+
+  const { data: warehousesData } = useWarehouses({ page_size: 100 });
+  const warehouses = warehousesData?.items || [];
 
   const createOrder = useCreateProductionOrder();
   const updateOrder = useUpdateProductionOrder();
   const deleteOrder = useDeleteProductionOrder();
 
   const [formData, setFormData] = useState<ProductionOrderFormData>({
+    product_id: 0,
     bom_id: 0,
-    quantity_to_produce: 1,
-    priority: '',
+    warehouse_id: 0,
+    planned_quantity: 1,
+    priority: 5,
     planned_start_date: '',
-    planned_end_date: '',
+    planned_completion_date: '',
     notes: '',
   });
 
@@ -93,13 +100,18 @@ export default function ProductionOrdersPage() {
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
 
+    if (!formData.product_id) errors.product_id = 'Product is required';
     if (!formData.bom_id) errors.bom_id = 'BOM is required';
-    if (!formData.quantity_to_produce || formData.quantity_to_produce <= 0) {
-      errors.quantity_to_produce = 'Quantity must be greater than 0';
+    if (!formData.warehouse_id) errors.warehouse_id = 'Warehouse is required';
+    if (!formData.planned_quantity || formData.planned_quantity <= 0) {
+      errors.planned_quantity = 'Quantity must be greater than 0';
     }
-    if (formData.planned_start_date && formData.planned_end_date) {
-      if (new Date(formData.planned_start_date) > new Date(formData.planned_end_date)) {
-        errors.planned_end_date = 'End date must be after start date';
+    if (formData.priority && (formData.priority < 1 || formData.priority > 10)) {
+      errors.priority = 'Priority must be between 1 and 10';
+    }
+    if (formData.planned_start_date && formData.planned_completion_date) {
+      if (new Date(formData.planned_start_date) > new Date(formData.planned_completion_date)) {
+        errors.planned_completion_date = 'End date must be after start date';
       }
     }
 
@@ -115,7 +127,7 @@ export default function ProductionOrdersPage() {
       const submitData = {
         ...formData,
         planned_start_date: formData.planned_start_date || undefined,
-        planned_end_date: formData.planned_end_date || undefined,
+        planned_completion_date: formData.planned_completion_date || undefined,
         priority: formData.priority || undefined,
         notes: formData.notes || undefined,
       };
@@ -137,11 +149,13 @@ export default function ProductionOrdersPage() {
   const handleEdit = (order: ProductionOrder) => {
     setEditingOrder(order);
     setFormData({
+      product_id: order.product?.product_id || order.product?.id || 0,
       bom_id: order.bom_id,
-      quantity_to_produce: order.quantity_to_produce,
-      priority: order.priority || '',
+      warehouse_id: order.warehouse?.warehouse_id || order.warehouse?.id || 0,
+      planned_quantity: order.quantity_to_produce,
+      priority: typeof order.priority === 'string' ? parseInt(order.priority) || 5 : (order.priority || 5),
       planned_start_date: order.planned_start_date ? order.planned_start_date.split('T')[0] : '',
-      planned_end_date: order.planned_end_date ? order.planned_end_date.split('T')[0] : '',
+      planned_completion_date: order.planned_end_date ? order.planned_end_date.split('T')[0] : '',
       notes: order.notes || '',
     });
     setFormErrors({});
@@ -177,11 +191,13 @@ export default function ProductionOrdersPage() {
     setIsModalOpen(false);
     setEditingOrder(null);
     setFormData({
+      product_id: 0,
       bom_id: 0,
-      quantity_to_produce: 1,
-      priority: '',
+      warehouse_id: 0,
+      planned_quantity: 1,
+      priority: 5,
       planned_start_date: '',
-      planned_end_date: '',
+      planned_completion_date: '',
       notes: '',
     });
     setFormErrors({});
@@ -426,10 +442,44 @@ export default function ProductionOrdersPage() {
               </h3>
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div>
+                  <label className="block text-sm font-medium text-gray-700">Product</label>
+                  <select
+                    value={formData.product_id || 0}
+                    onChange={(e) => setFormData({ ...formData, product_id: parseInt(e.target.value) || 0 })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value={0}>Select Product</option>
+                    {products.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name} ({product.code})
+                      </option>
+                    ))}
+                  </select>
+                  {formErrors.product_id && <p className="text-red-500 text-xs mt-1">{formErrors.product_id}</p>}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Warehouse</label>
+                  <select
+                    value={formData.warehouse_id || 0}
+                    onChange={(e) => setFormData({ ...formData, warehouse_id: parseInt(e.target.value) || 0 })}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                  >
+                    <option value={0}>Select Warehouse</option>
+                    {warehouses.map((warehouse) => (
+                      <option key={warehouse.id} value={warehouse.id}>
+                        {warehouse.name} ({warehouse.type?.replace('_', ' ')})
+                      </option>
+                    ))}
+                  </select>
+                  {formErrors.warehouse_id && <p className="text-red-500 text-xs mt-1">{formErrors.warehouse_id}</p>}
+                </div>
+
+                <div>
                   <label className="block text-sm font-medium text-gray-700">BOM</label>
                   <select
-                    value={formData.bom_id}
-                    onChange={(e) => setFormData({ ...formData, bom_id: parseInt(e.target.value) })}
+                    value={formData.bom_id || 0}
+                    onChange={(e) => setFormData({ ...formData, bom_id: parseInt(e.target.value) || 0 })}
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                     disabled={isLoadingBOMs}
                   >
@@ -472,31 +522,37 @@ export default function ProductionOrdersPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Quantity to Produce</label>
+                    <label className="block text-sm font-medium text-gray-700">Planned Quantity</label>
                     <input
                       type="number"
                       min="1"
                       step="0.01"
-                      value={formData.quantity_to_produce}
-                      onChange={(e) => setFormData({ ...formData, quantity_to_produce: parseFloat(e.target.value) || 1 })}
+                      value={formData.planned_quantity || 1}
+                      onChange={(e) => setFormData({ ...formData, planned_quantity: parseFloat(e.target.value) || 1 })}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                     />
-                    {formErrors.quantity_to_produce && <p className="text-red-500 text-xs mt-1">{formErrors.quantity_to_produce}</p>}
+                    {formErrors.planned_quantity && <p className="text-red-500 text-xs mt-1">{formErrors.planned_quantity}</p>}
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Priority</label>
+                    <label className="block text-sm font-medium text-gray-700">Priority (1-10)</label>
                     <select
-                      value={formData.priority}
-                      onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
+                      value={formData.priority || 5}
+                      onChange={(e) => setFormData({ ...formData, priority: parseInt(e.target.value) || 5 })}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                     >
-                      <option value="">Select Priority</option>
-                      <option value="LOW">Low</option>
-                      <option value="MEDIUM">Medium</option>
-                      <option value="HIGH">High</option>
-                      <option value="URGENT">Urgent</option>
+                      <option value={1}>1 - Highest Priority</option>
+                      <option value={2}>2 - Very High</option>
+                      <option value={3}>3 - High</option>
+                      <option value={4}>4 - Above Normal</option>
+                      <option value={5}>5 - Normal</option>
+                      <option value={6}>6 - Below Normal</option>
+                      <option value={7}>7 - Low</option>
+                      <option value={8}>8 - Very Low</option>
+                      <option value={9}>9 - Lowest</option>
+                      <option value={10}>10 - Lowest Priority</option>
                     </select>
+                    {formErrors.priority && <p className="text-red-500 text-xs mt-1">{formErrors.priority}</p>}
                   </div>
                 </div>
 
@@ -505,28 +561,28 @@ export default function ProductionOrdersPage() {
                     <label className="block text-sm font-medium text-gray-700">Planned Start Date</label>
                     <input
                       type="date"
-                      value={formData.planned_start_date}
+                      value={formData.planned_start_date || ''}
                       onChange={(e) => setFormData({ ...formData, planned_start_date: e.target.value })}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-gray-700">Planned End Date</label>
+                    <label className="block text-sm font-medium text-gray-700">Planned Completion Date</label>
                     <input
                       type="date"
-                      value={formData.planned_end_date}
-                      onChange={(e) => setFormData({ ...formData, planned_end_date: e.target.value })}
+                      value={formData.planned_completion_date || ''}
+                      onChange={(e) => setFormData({ ...formData, planned_completion_date: e.target.value })}
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                     />
-                    {formErrors.planned_end_date && <p className="text-red-500 text-xs mt-1">{formErrors.planned_end_date}</p>}
+                    {formErrors.planned_completion_date && <p className="text-red-500 text-xs mt-1">{formErrors.planned_completion_date}</p>}
                   </div>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Notes</label>
                   <textarea
-                    value={formData.notes}
+                    value={formData.notes || ''}
                     onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                     rows={3}
                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"

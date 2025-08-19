@@ -157,14 +157,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     """Handle FastAPI request validation errors with detailed information."""
     logger.error(f"Validation error for {request.method} {request.url}: {exc.errors()}")
     
-    # Get the raw request body for debugging
-    try:
-        body = await request.body()
-        body_str = body.decode('utf-8') if body else "Empty body"
-        logger.error(f"Request body that caused validation error: {body_str}")
-    except Exception as e:
-        logger.error(f"Could not read request body: {e}")
-        body_str = "Could not decode body"
+    # Note: Don't try to read request.body() here as it's already consumed during validation
+    # This would cause the request to hang indefinitely
+    logger.error(f"Request body already consumed during validation. Error details: {exc.errors()}")
     
     # Ensure errors are JSON serializable
     try:
