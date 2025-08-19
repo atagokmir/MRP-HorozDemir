@@ -131,6 +131,11 @@ export class APIClient {
       };
     }
 
+    // If response already has proper APIResponse format, return as-is
+    if (data.status && data.data && typeof data.data === 'object') {
+      return data;
+    }
+
     // Backend returns different formats, normalize to frontend expectation
     if ((data.status === 'success' && !data.data) || (data.items && !data.status)) {
       // Backend format: { items: [...], pagination: {...}, status: "success" }

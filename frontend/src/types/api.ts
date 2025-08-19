@@ -250,11 +250,19 @@ export interface StockOutRequest {
 }
 
 export interface StockOutResponse {
-  total_quantity_allocated: number;
-  total_cost: number;
-  weighted_average_cost: number;
-  fifo_allocations: FIFOAllocation[];
-  remaining_batches: FIFOBatch[];
+  status: string;
+  message: string;
+  data: {
+    quantity_removed: number;
+    total_cost: number;
+    batches_affected: number;
+    fifo_breakdown: {
+      quantity: number;
+      unit_cost: number;
+      batch_cost: number;
+    }[];
+  };
+  timestamp: string;
 }
 
 export interface StockAdjustmentRequest {

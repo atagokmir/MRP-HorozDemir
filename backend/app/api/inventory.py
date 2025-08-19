@@ -483,11 +483,24 @@ def stock_out_operation(
     # Calculate total cost based on FIFO
     total_cost = sum(abs(movement.quantity) * movement.unit_cost for movement in movements_created)
     
-    return MessageResponse(
-        message=f"Stock out operation completed successfully. "
-                f"Consumed {stock_out_request.quantity} units from {len(movements_created)} batches. "
-                f"Total FIFO cost: {total_cost:.2f}"
-    )
+    return {
+        "status": "success",
+        "message": f"Successfully removed {stock_out_request.quantity} units from stock",
+        "data": {
+            "quantity_removed": float(stock_out_request.quantity),
+            "total_cost": float(total_cost),
+            "batches_affected": len(movements_created),
+            "fifo_breakdown": [
+                {
+                    "quantity": float(abs(movement.quantity)),
+                    "unit_cost": float(movement.unit_cost),
+                    "batch_cost": float(abs(movement.quantity) * movement.unit_cost)
+                }
+                for movement in movements_created
+            ]
+        },
+        "timestamp": datetime.now().isoformat()
+    }
 
 
 @router.post("/adjustment")  # TODO: response_model=MessageResponse)
