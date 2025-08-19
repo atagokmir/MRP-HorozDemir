@@ -133,14 +133,14 @@ export function NotificationCenter({ className = '' }: NotificationCenterProps) 
                   <div className="px-4 py-3 bg-gray-50">
                     <div className="flex space-x-2">
                       <Link
-                        href="/inventory?filter=critical"
+                        href="/dashboard/inventory?filter=critical"
                         className="flex-1 text-center px-3 py-2 text-xs font-medium text-white bg-red-600 rounded hover:bg-red-700"
                         onClick={() => setIsOpen(false)}
                       >
                         View All Critical Items
                       </Link>
                       <Link
-                        href="/stock-operations"
+                        href="/dashboard/stock-operations"
                         className="flex-1 text-center px-3 py-2 text-xs font-medium text-indigo-600 bg-white border border-indigo-600 rounded hover:bg-indigo-50"
                         onClick={() => setIsOpen(false)}
                       >

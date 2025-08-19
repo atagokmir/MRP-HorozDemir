@@ -24,28 +24,28 @@ export default function DashboardPage() {
       name: 'Total Products',
       value: productsData?.total || 0,
       icon: ClipboardDocumentListIcon,
-      href: '/products',
+      href: '/dashboard/products',
       loading: productsLoading,
     },
     {
       name: 'Active Warehouses',
       value: warehousesData?.items?.filter(w => w.is_active).length || 0,
       icon: BuildingStorefrontIcon,
-      href: '/warehouses',
+      href: '/dashboard/warehouses',
       loading: warehousesLoading,
     },
     {
       name: 'Inventory Items',
       value: inventoryData?.total || 0,
       icon: CubeIcon,
-      href: '/inventory',
+      href: '/dashboard/inventory',
       loading: inventoryLoading,
     },
     {
       name: 'Critical Stock Items',
       value: criticalStock?.length || 0,
       icon: ExclamationTriangleIcon,
-      href: '/inventory?filter=critical',
+      href: '/dashboard/inventory?filter=critical',
       loading: criticalLoading,
       color: 'text-red-600',
     },
@@ -140,7 +140,7 @@ export default function DashboardPage() {
             )}
           </div>
           <Link
-            href="/inventory?filter=critical"
+            href="/dashboard/inventory?filter=critical"
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700"
           >
             View All Critical Items
@@ -154,7 +154,7 @@ export default function DashboardPage() {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-medium text-gray-900">Recent Products</h2>
             <Link
-              href="/products"
+              href="/dashboard/products"
               className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
             >
               View all
