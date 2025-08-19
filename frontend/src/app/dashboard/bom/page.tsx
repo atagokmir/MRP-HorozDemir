@@ -4,14 +4,17 @@ import { useState, useEffect } from 'react';
 import { useBOMs, useBOM, useCreateBOM, useUpdateBOM, useDeleteBOM, useBOMCostCalculation } from '@/hooks/use-bom';
 import { useProducts } from '@/hooks/use-products';
 import { BOM, CreateBOMRequest, Product, ProductCategory, UnitOfMeasure } from '@/types/api';
-import { formatDate, handleAPIError, debounce } from '@/lib/utils';
+import { formatDate, formatDateTime, formatCurrency, formatNumber, handleAPIError, debounce } from '@/lib/utils';
 import { 
   PlusIcon, 
   PencilIcon, 
   TrashIcon, 
   MagnifyingGlassIcon,
   EyeIcon,
-  CurrencyDollarIcon
+  CurrencyDollarIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  ClockIcon
 } from '@heroicons/react/24/outline';
 
 type BOMFormData = Omit<CreateBOMRequest, 'bom_items'> & {
@@ -717,19 +720,36 @@ export default function BOMPage() {
       {/* Cost Calculation Modal */}
       {showCostModal && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-          <div className="relative top-20 mx-auto p-5 border w-full max-w-3xl shadow-lg rounded-md bg-white">
+          <div className="relative top-10 mx-auto p-5 border w-full max-w-6xl shadow-lg rounded-md bg-white">
             <div className="mt-3">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Cost Calculation
-              </h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium text-gray-900">
+                  BOM Cost Calculation - FIFO Breakdown
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowCostModal(false);
+                    setCostCalculationId(null);
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  ×
+                </button>
+              </div>
               
               {isLoadingCostCalculation ? (
                 <div className="text-center py-8">
-                  <div className="animate-pulse">Loading cost calculation...</div>
+                  <div className="animate-pulse flex items-center justify-center">
+                    <ClockIcon className="h-5 w-5 mr-2" />
+                    Loading cost calculation...
+                  </div>
                 </div>
               ) : costCalculationError ? (
                 <div className="text-center py-8">
-                  <div className="text-red-600">Error loading cost calculation: {handleAPIError(costCalculationError)}</div>
+                  <div className="text-red-600 flex items-center justify-center mb-2">
+                    <ExclamationTriangleIcon className="h-5 w-5 mr-2" />
+                    Error loading cost calculation: {handleAPIError(costCalculationError)}
+                  </div>
                   <button
                     onClick={() => {
                       setShowCostModal(false);
@@ -741,51 +761,162 @@ export default function BOMPage() {
                   </button>
                 </div>
               ) : costCalculation ? (
-                <div className="space-y-4">
-                  <div className="bg-green-50 p-4 rounded-md">
-                    <p className="text-lg font-medium text-green-900">
-                      Total Cost: ${costCalculation.total_cost?.toFixed(2) || '0.00'}
-                    </p>
+                <div className="space-y-6">
+                  {/* Summary Header */}
+                  <div className={`p-4 rounded-md ${costCalculation.calculable ? 'bg-green-50' : 'bg-yellow-50'}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center">
+                        {costCalculation.calculable ? (
+                          <CheckCircleIcon className="h-6 w-6 text-green-600 mr-2" />
+                        ) : (
+                          <ExclamationTriangleIcon className="h-6 w-6 text-yellow-600 mr-2" />
+                        )}
+                        <div>
+                          <h4 className={`text-lg font-medium ${costCalculation.calculable ? 'text-green-900' : 'text-yellow-900'}`}>
+                            {costCalculation.calculable 
+                              ? formatCurrency(costCalculation.total_material_cost)
+                              : 'Cannot Calculate - Insufficient Stock'
+                            }
+                          </h4>
+                          <p className={`text-sm ${costCalculation.calculable ? 'text-green-700' : 'text-yellow-700'}`}>
+                            For quantity: {formatNumber(costCalculation.quantity, 0)} units
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-sm ${costCalculation.calculable ? 'text-green-700' : 'text-yellow-700'}`}>
+                          Stock Coverage: {formatNumber(costCalculation.stock_coverage_percentage, 1)}%
+                        </div>
+                        <div className={`text-xs ${costCalculation.calculable ? 'text-green-600' : 'text-yellow-600'}`}>
+                          {costCalculation.components_with_stock}/{costCalculation.components_with_stock + costCalculation.components_missing_stock} components available
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
+                  {/* Missing Components Warning */}
+                  {costCalculation.missing_components && costCalculation.missing_components.length > 0 && (
+                    <div className="bg-red-50 border border-red-200 rounded-md p-4">
+                      <div className="flex items-center mb-2">
+                        <ExclamationTriangleIcon className="h-5 w-5 text-red-600 mr-2" />
+                        <h5 className="text-sm font-medium text-red-900">
+                          Missing Components ({costCalculation.missing_components.length})
+                        </h5>
+                      </div>
+                      <div className="space-y-2">
+                        {costCalculation.missing_components.map((missing, index) => (
+                          <div key={`missing-${missing.product_id}-${index}`} className="text-sm text-red-800">
+                            <span className="font-medium">{missing.product_name}</span> ({missing.product_code}): 
+                            Need {formatNumber(missing.quantity_required)} units, 
+                            have {formatNumber(missing.quantity_available)} units,
+                            <span className="font-medium text-red-900"> missing {formatNumber(missing.quantity_missing)} units</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Component Costs Breakdown */}
                   <div>
-                    <p className="text-sm font-medium text-gray-700 mb-2">Detailed Costs</p>
-                    {costCalculation.detailed_costs && costCalculation.detailed_costs.length > 0 ? (
-                      <div className="border border-gray-300 rounded-md">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50">
-                            <tr>
-                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
-                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Quantity</th>
-                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Unit Cost</th>
-                              <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Total Cost</th>
+                    <h5 className="text-sm font-medium text-gray-700 mb-3">Component Cost Breakdown</h5>
+                    <div className="border border-gray-300 rounded-md overflow-hidden">
+                      <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Component
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Required
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Available
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Unit Cost
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              Total Cost
+                            </th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              FIFO Batches
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                          {costCalculation.component_costs.map((component, index) => (
+                            <tr key={`component-${component.product_id}-${index}`} className={component.has_sufficient_stock ? '' : 'bg-red-50'}>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center">
+                                  {component.has_sufficient_stock ? (
+                                    <CheckCircleIcon className="h-4 w-4 text-green-500 mr-2" />
+                                  ) : (
+                                    <ExclamationTriangleIcon className="h-4 w-4 text-red-500 mr-2" />
+                                  )}
+                                  <div>
+                                    <div className="text-sm font-medium text-gray-900">
+                                      {component.product_name}
+                                    </div>
+                                    <div className="text-sm text-gray-500">
+                                      {component.product_code}
+                                    </div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                {formatNumber(component.quantity_required)}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                <span className={component.has_sufficient_stock ? 'text-green-600' : 'text-red-600'}>
+                                  {formatNumber(component.quantity_available)}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                {component.total_cost > 0 ? formatCurrency(component.unit_cost) : '-'}
+                              </td>
+                              <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                                {component.total_cost > 0 ? formatCurrency(component.total_cost) : '-'}
+                              </td>
+                              <td className="px-4 py-3">
+                                {component.fifo_batches && component.fifo_batches.length > 0 ? (
+                                  <div className="space-y-1">
+                                    {component.fifo_batches.map((batch, batchIndex) => (
+                                      <div key={`batch-${batch.batch_number}-${batchIndex}`} className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">
+                                        <div className="font-mono">
+                                          {batch.batch_number}
+                                        </div>
+                                        <div>
+                                          {formatNumber(batch.quantity_used)} × {formatCurrency(batch.unit_cost)}
+                                        </div>
+                                        <div className="text-gray-500">
+                                          {formatDate(batch.entry_date)}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400 text-sm">No batches</span>
+                                )}
+                              </td>
                             </tr>
-                          </thead>
-                          <tbody className="bg-white divide-y divide-gray-200">
-                            {costCalculation.detailed_costs.map((cost, index) => (
-                              <tr key={`cost-${cost.product_name || 'unknown'}-${index}`}>
-                                <td className="px-4 py-2 text-sm text-gray-900">
-                                  {cost.product_name || 'Unknown Product'}
-                                </td>
-                                <td className="px-4 py-2 text-sm text-gray-900">
-                                  {cost.quantity || 0}
-                                </td>
-                                <td className="px-4 py-2 text-sm text-gray-900">
-                                  ${cost.unit_cost?.toFixed(2) || '0.00'}
-                                </td>
-                                <td className="px-4 py-2 text-sm text-gray-900">
-                                  ${cost.total_cost?.toFixed(2) || '0.00'}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Calculation Details */}
+                  <div className="bg-gray-50 p-4 rounded-md">
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-gray-600">Cost Basis:</span>
+                        <span className="ml-2 font-medium">{costCalculation.cost_basis}</span>
                       </div>
-                    ) : (
-                      <div className="border border-gray-300 rounded-md p-4 text-center text-gray-500">
-                        No detailed costs available
+                      <div>
+                        <span className="text-gray-600">Calculation Date:</span>
+                        <span className="ml-2">{formatDateTime(costCalculation.calculation_date)}</span>
                       </div>
-                    )}
+                    </div>
                   </div>
                 </div>
               ) : (
@@ -794,7 +925,7 @@ export default function BOMPage() {
                 </div>
               )}
 
-              <div className="flex justify-end pt-4">
+              <div className="flex justify-end pt-4 border-t">
                 <button
                   onClick={() => {
                     setShowCostModal(false);

@@ -114,6 +114,44 @@ class BomCostCalculationResponse(BaseModel):
     cost_breakdown: Optional[Dict[str, float]] = None
 
 
+class FifoBatch(BaseModel):
+    """Schema for FIFO batch information in cost calculation."""
+    batch_number: str = Field(..., description="Batch identifier")
+    quantity_used: Decimal = Field(..., description="Quantity used from this batch")
+    unit_cost: Decimal = Field(..., description="Unit cost of this batch")
+    entry_date: datetime = Field(..., description="Entry date of the batch")
+
+
+class ComponentCost(BaseModel):
+    """Schema for individual component cost in BOM calculation."""
+    product_id: int = Field(..., description="Component product ID")
+    product_name: str = Field(..., description="Component product name")
+    product_code: str = Field(..., description="Component product code")
+    quantity_required: Decimal = Field(..., description="Required quantity")
+    quantity_available: Decimal = Field(..., description="Available quantity in inventory")
+    unit_cost: Decimal = Field(..., description="Calculated FIFO unit cost")
+    total_cost: Decimal = Field(..., description="Total cost for this component")
+    has_sufficient_stock: bool = Field(..., description="Whether enough stock is available")
+    fifo_batches: List[FifoBatch] = Field(..., description="FIFO batches used for costing")
+
+
+class EnhancedBomCostCalculation(BaseModel):
+    """Enhanced schema for detailed BOM cost calculation response."""
+    bom_id: int = Field(..., description="BOM ID")
+    quantity: Decimal = Field(..., description="Quantity for calculation")
+    calculable: bool = Field(..., description="Whether cost can be calculated")
+    total_material_cost: Decimal = Field(..., description="Total material cost")
+    component_costs: List[ComponentCost] = Field(..., description="Detailed component costs")
+    missing_components: List[Dict[str, Any]] = Field(..., description="Components with insufficient stock")
+    calculation_date: datetime = Field(default_factory=datetime.now, description="Calculation timestamp")
+    cost_basis: str = Field(default="FIFO", description="Costing method used")
+    
+    # Summary statistics
+    components_with_stock: int = Field(..., description="Number of components with sufficient stock")
+    components_missing_stock: int = Field(..., description="Number of components with insufficient stock")
+    stock_coverage_percentage: float = Field(..., description="Percentage of components with sufficient stock")
+
+
 # BOM Explosion Schemas
 class BomExplosionItem(BaseModel):
     """Schema for exploded BOM item."""

@@ -379,7 +379,54 @@ export interface UpdateBOMRequest {
   }[];
 }
 
+// FIFO batch information
+export interface FifoBatch {
+  batch_number: string;
+  quantity_used: number;
+  unit_cost: number;
+  entry_date: string;
+}
+
+// Individual component cost details
+export interface ComponentCost {
+  product_id: number;
+  product_name: string;
+  product_code: string;
+  quantity_required: number;
+  quantity_available: number;
+  unit_cost: number;
+  total_cost: number;
+  has_sufficient_stock: boolean;
+  fifo_batches: FifoBatch[];
+}
+
+// Missing component information
+export interface MissingComponent {
+  product_id: number;
+  product_name: string;
+  product_code: string;
+  quantity_required: number;
+  quantity_available: number;
+  quantity_missing: number;
+}
+
+// Enhanced BOM cost calculation response (matches backend)
 export interface BOMCostCalculation {
+  bom_id: number;
+  quantity: number;
+  calculable: boolean;
+  total_material_cost: number;
+  component_costs: ComponentCost[];
+  missing_components: MissingComponent[];
+  calculation_date: string;
+  cost_basis: string;
+  components_with_stock: number;
+  components_missing_stock: number;
+  stock_coverage_percentage: number;
+}
+
+// Legacy cost calculation schema (kept for backward compatibility)
+export interface LegacyBOMCostCalculation {
   bom_id: number;
   total_cost: number;
   detailed_costs: {
