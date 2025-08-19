@@ -65,6 +65,10 @@ export function useStockIn() {
       queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
       queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      // Invalidate BOM cost calculations since stock changes affect FIFO costing
+      queryClient.invalidateQueries({ queryKey: ['boms'], predicate: (query) => {
+        return query.queryKey.includes('cost-calculation');
+      }});
     },
   });
 }
@@ -81,6 +85,10 @@ export function useStockOut() {
       queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
       queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      // Invalidate BOM cost calculations since stock changes affect FIFO costing
+      queryClient.invalidateQueries({ queryKey: ['boms'], predicate: (query) => {
+        return query.queryKey.includes('cost-calculation');
+      }});
     },
   });
 }
@@ -97,6 +105,10 @@ export function useStockAdjustment() {
       queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
       queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      // Invalidate BOM cost calculations since stock changes affect FIFO costing
+      queryClient.invalidateQueries({ queryKey: ['boms'], predicate: (query) => {
+        return query.queryKey.includes('cost-calculation');
+      }});
     },
   });
 }

@@ -33,7 +33,10 @@ export function useBOM(id: number) {
   });
 }
 
-export function useBOMCostCalculation(id: number) {
+export function useBOMCostCalculation(id: number, options?: {
+  refetchOnWindowFocus?: boolean;
+  refetchInterval?: number;
+}) {
   return useQuery({
     queryKey: ['boms', id, 'cost-calculation'],
     queryFn: async () => {
@@ -41,6 +44,9 @@ export function useBOMCostCalculation(id: number) {
       return response.data;
     },
     enabled: !!id,
+    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? true,
+    refetchInterval: options?.refetchInterval,
+    staleTime: 0, // Always consider data stale to ensure fresh calculations
   });
 }
 

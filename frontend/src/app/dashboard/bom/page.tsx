@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useBOMs, useBOM, useCreateBOM, useUpdateBOM, useDeleteBOM, useBOMCostCalculation } from '@/hooks/use-bom';
 import { useProducts } from '@/hooks/use-products';
 import { BOM, CreateBOMRequest, Product, ProductCategory, UnitOfMeasure } from '@/types/api';
@@ -14,7 +14,8 @@ import {
   CurrencyDollarIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
-  ClockIcon
+  ClockIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline';
 
 type BOMFormData = Omit<CreateBOMRequest, 'bom_items'> & {
@@ -52,7 +53,16 @@ export default function BOMPage() {
   const products = productsData?.items || [];
 
   const { data: individualBOM, isLoading: isLoadingIndividualBOM, error: bomViewError } = useBOM(viewingBOMId ?? 0);
-  const { data: costCalculation, isLoading: isLoadingCostCalculation, error: costCalculationError } = useBOMCostCalculation(costCalculationId || 0);
+  const { 
+    data: costCalculation, 
+    isLoading: isLoadingCostCalculation, 
+    error: costCalculationError,
+    refetch: refetchCostCalculation,
+    isFetching: isRefetchingCostCalculation
+  } = useBOMCostCalculation(costCalculationId || 0, {
+    refetchOnWindowFocus: true,
+    refetchInterval: showCostModal ? 30000 : undefined, // Refetch every 30s when modal is open
+  });
 
   const createBOM = useCreateBOM();
   const updateBOM = useUpdateBOM();
@@ -177,6 +187,12 @@ export default function BOMPage() {
     setCostCalculationId(bomId);
     setShowCostModal(true);
   };
+
+  const handleRefreshCostCalculation = useCallback(async () => {
+    if (costCalculationId) {
+      await refetchCostCalculation();
+    }
+  }, [costCalculationId, refetchCostCalculation]);
 
   const handleDelete = async (bom: BOM) => {
     const bomName = bom.bom_name ?? bom.name ?? 'Unknown BOM';
@@ -723,18 +739,36 @@ export default function BOMPage() {
           <div className="relative top-10 mx-auto p-5 border w-full max-w-6xl shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-medium text-gray-900">
-                  BOM Cost Calculation - FIFO Breakdown
-                </h3>
-                <button
-                  onClick={() => {
-                    setShowCostModal(false);
-                    setCostCalculationId(null);
-                  }}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  ×
-                </button>
+                <div className="flex items-center">
+                  <h3 className="text-lg font-medium text-gray-900 mr-3">
+                    BOM Cost Calculation - FIFO Breakdown
+                  </h3>
+                  {isRefetchingCostCalculation && (
+                    <div className="flex items-center text-sm text-gray-500">
+                      <ClockIcon className="h-4 w-4 animate-spin mr-1" />
+                      Refreshing...
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={handleRefreshCostCalculation}
+                    disabled={isLoadingCostCalculation || isRefetchingCostCalculation}
+                    className="p-1 text-gray-500 hover:text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Refresh cost calculation"
+                  >
+                    <ArrowPathIcon className={`h-5 w-5 ${isRefetchingCostCalculation ? 'animate-spin' : ''}`} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowCostModal(false);
+                      setCostCalculationId(null);
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
               
               {isLoadingCostCalculation ? (
@@ -915,6 +949,15 @@ export default function BOMPage() {
                       <div>
                         <span className="text-gray-600">Calculation Date:</span>
                         <span className="ml-2">{formatDateTime(costCalculation.calculation_date)}</span>
+                      </div>
+                    </div>
+                    <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-md">
+                      <div className="flex items-start">
+                        <ArrowPathIcon className="h-4 w-4 text-blue-600 mr-2 mt-0.5 flex-shrink-0" />
+                        <div className="text-xs text-blue-800">
+                          <p className="font-medium mb-1">Real-time Updates Enabled</p>
+                          <p>This cost calculation automatically refreshes when inventory changes occur. Data updates every 30 seconds and when you return to this page.</p>
+                        </div>
                       </div>
                     </div>
                   </div>
