@@ -177,6 +177,13 @@ class ProductionComponentList(BaseModel):
     not_allocated_count: int = Field(0, description="Number of not allocated components")
 
 
+class StockAnalysisRequest(BaseModel):
+    """Schema for standalone stock analysis request."""
+    bom_id: int = Field(..., description="BOM ID to analyze")
+    warehouse_id: int = Field(..., description="Warehouse ID for stock checking")
+    quantity_to_produce: Decimal = Field(..., gt=0, description="Quantity to produce")
+
+
 # Legacy compatibility schemas (for existing code)
 class ProductionOrderRequest(ProductionOrderCreate):
     """Legacy alias for ProductionOrderCreate."""

@@ -493,6 +493,19 @@ export interface CreateProductionOrderRequest {
   notes?: string;
 }
 
+// Enhanced production order creation with analysis
+export interface CreateProductionOrderWithAnalysisRequest {
+  product_id: number;
+  bom_id: number;
+  warehouse_id: number;
+  planned_quantity: number;
+  priority?: number;
+  planned_start_date?: string;
+  planned_completion_date?: string;
+  notes?: string;
+  auto_create_missing?: boolean; // Whether to create nested orders for missing semi-products
+}
+
 export interface UpdateProductionOrderRequest {
   quantity_to_produce?: number;
   status?: ProductionOrderStatus;
@@ -520,6 +533,121 @@ export interface ProductionOrderFilters {
   bom_id?: number;
   product_id?: number;
   created_by?: number;
+}
+
+// Advanced MRP Types
+
+// Stock Analysis for Production Orders
+export interface StockAnalysisItem {
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  required_quantity: number;
+  available_quantity: number;
+  sufficient_stock: boolean;
+  shortage_quantity?: number;
+  unit_cost?: number;
+  total_cost?: number;
+  product_type: string;
+  is_semi_finished?: boolean;
+}
+
+export interface ProductionOrderStockAnalysis {
+  production_order_id?: number;
+  bom_id: number;
+  bom_name: string;
+  quantity_to_produce: number;
+  warehouse_id: number;
+  warehouse_name: string;
+  analysis_items: StockAnalysisItem[];
+  can_produce: boolean;
+  missing_materials: StockAnalysisItem[];
+  total_material_cost: number;
+  analysis_date: string;
+}
+
+// Component-level progress tracking
+export type ComponentStatus = 'PENDING' | 'ALLOCATED' | 'CONSUMED' | 'COMPLETED';
+
+export interface ProductionOrderComponent {
+  component_id: number;
+  production_order_id: number;
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  required_quantity: number;
+  allocated_quantity: number;
+  consumed_quantity: number;
+  status: ComponentStatus;
+  unit_cost?: number;
+  total_cost?: number;
+  notes?: string;
+  updated_at: string;
+}
+
+export interface UpdateComponentStatusRequest {
+  component_id: number;
+  status: ComponentStatus;
+  consumed_quantity?: number;
+  notes?: string;
+}
+
+// Stock Reservation Management
+export interface StockReservation {
+  reservation_id: number;
+  production_order_id: number;
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  reserved_quantity: number;
+  warehouse_id: number;
+  warehouse_name: string;
+  reservation_date: string;
+  status: 'ACTIVE' | 'CONSUMED' | 'RELEASED';
+  expiry_date?: string;
+  batch_number?: string;
+  unit_cost?: number;
+}
+
+// Production Tree Structure
+export interface ProductionTreeNode {
+  production_order_id: number;
+  order_number: string;
+  product_id: number;
+  product_code: string;
+  product_name: string;
+  quantity_to_produce: number;
+  status: ProductionOrderStatus;
+  level: number;
+  parent_order_id?: number;
+  children: ProductionTreeNode[];
+  dependencies?: ProductionTreeNode[];
+}
+
+// Enhanced Production Order with advanced features
+export interface EnhancedProductionOrder extends ProductionOrder {
+  components?: ProductionOrderComponent[];
+  stock_reservations?: StockReservation[];
+  nested_orders?: ProductionOrder[];
+  production_tree?: ProductionTreeNode;
+  warehouse?: {
+    warehouse_id: number;
+    warehouse_code: string;
+    warehouse_name: string;
+    warehouse_type: string;
+  };
+  completion_percentage?: number;
+  estimated_cost?: number;
+  actual_cost?: number;
+}
+
+// Advanced production order creation response
+export interface CreateProductionOrderWithAnalysisResponse {
+  production_order: EnhancedProductionOrder;
+  stock_analysis: ProductionOrderStockAnalysis;
+  nested_orders_created?: ProductionOrder[];
+  warnings?: string[];
+  suggestions?: string[];
 }
 
 // Error Types

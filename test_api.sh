@@ -15,12 +15,12 @@ curl -s "$BASE_URL/../health" | jq '.'
 echo -e "\n2. User Login:"
 LOGIN_RESPONSE=$(curl -s -X POST "$BASE_URL/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"username": "admin@example.com", "password": "admin123"}')
+  -d '{"username": "admin", "password": "admin123"}')
 
 echo $LOGIN_RESPONSE | jq '.'
 
 # Extract token
-TOKEN=$(echo $LOGIN_RESPONSE | jq -r '.data.access_token')
+TOKEN=$(echo $LOGIN_RESPONSE | jq -r '.access_token')
 
 if [ "$TOKEN" = "null" ]; then
     echo "Login failed! Cannot continue testing."

@@ -47,6 +47,7 @@ class Warehouse(BaseModel, ActiveRecordMixin):
     production_orders = relationship("ProductionOrder", back_populates="warehouse")
     purchase_orders = relationship("PurchaseOrder", back_populates="warehouse")
     critical_stock_alerts = relationship("CriticalStockAlert", back_populates="warehouse")
+    stock_reservations = relationship("StockReservation", back_populates="warehouse")
     
     @validates('warehouse_type')
     def validate_warehouse_type(self, key, warehouse_type):
@@ -115,6 +116,7 @@ class Product(BaseModel, ActiveRecordMixin):
     production_order_components = relationship("ProductionOrderComponent", back_populates="component_product")
     purchase_order_items = relationship("PurchaseOrderItem", back_populates="product")
     critical_stock_alerts = relationship("CriticalStockAlert", back_populates="product")
+    stock_reservations = relationship("StockReservation", back_populates="product")
     cost_calculation_history = relationship("CostCalculationHistory", back_populates="product")
     
     @validates('product_type')

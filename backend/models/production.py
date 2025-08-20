@@ -92,6 +92,19 @@ class ProductionOrder(BaseModel, AuditMixin):
     stock_allocations = relationship("StockAllocation", back_populates="production_order",
                                    cascade="all, delete-orphan")
     
+    # New relationships for advanced MRP functionality
+    stock_reservations = relationship("StockReservation", 
+                                    primaryjoin="and_(ProductionOrder.production_order_id == foreign(StockReservation.reserved_for_id), "
+                                              "StockReservation.reserved_for_type == 'PRODUCTION_ORDER')",
+                                    viewonly=True)
+    dependent_orders = relationship("ProductionDependency", 
+                                  foreign_keys="ProductionDependency.parent_production_order_id",
+                                  back_populates="parent_production_order",
+                                  cascade="all, delete-orphan")
+    dependency_orders = relationship("ProductionDependency", 
+                                   foreign_keys="ProductionDependency.dependent_production_order_id",
+                                   back_populates="dependent_production_order")
+    
     @validates('status')
     def validate_status(self, key, status):
         valid_statuses = {'PLANNED', 'RELEASED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'ON_HOLD'}
@@ -228,6 +241,14 @@ class ProductionOrderComponent(BaseModel):
     allocation_status = Column(String(20), default='NOT_ALLOCATED',
                               comment="Allocation status: NOT_ALLOCATED, PARTIALLY_ALLOCATED, FULLY_ALLOCATED, CONSUMED")
     
+    # Enhanced component-level tracking fields
+    component_status = Column(String(20), default='NOT_STARTED',
+                             comment="Component production status: NOT_STARTED, IN_PROGRESS, COMPLETED, CANCELLED")
+    started_at = Column(DateTime, nullable=True,
+                       comment="When component production started")
+    completed_at = Column(DateTime, nullable=True,
+                         comment="When component production completed")
+    
     # Relationships
     production_order = relationship("ProductionOrder", back_populates="production_order_components")
     component_product = relationship("Product", back_populates="production_order_components")
@@ -246,6 +267,13 @@ class ProductionOrderComponent(BaseModel):
         if allocation_status not in valid_statuses:
             raise ValueError(f"allocation_status must be one of: {valid_statuses}")
         return allocation_status
+    
+    @validates('component_status')
+    def validate_component_status(self, key, component_status):
+        valid_statuses = {'NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'}
+        if component_status not in valid_statuses:
+            raise ValueError(f"component_status must be one of: {valid_statuses}")
+        return component_status
     
     @validates('unit_cost')
     def validate_unit_cost(self, key, unit_cost):
@@ -311,6 +339,38 @@ class ProductionOrderComponent(BaseModel):
             self.allocation_status = 'PARTIALLY_ALLOCATED'
         else:
             self.allocation_status = 'FULLY_ALLOCATED'
+    
+    def start_component(self):
+        """Start component production"""
+        if self.component_status != 'NOT_STARTED':
+            raise ValueError(f"Cannot start component in {self.component_status} status")
+        self.component_status = 'IN_PROGRESS'
+        self.started_at = datetime.now()
+    
+    def complete_component(self):
+        """Complete component production"""
+        if self.component_status != 'IN_PROGRESS':
+            raise ValueError(f"Cannot complete component in {self.component_status} status")
+        self.component_status = 'COMPLETED'
+        self.completed_at = datetime.now()
+    
+    def cancel_component(self):
+        """Cancel component production"""
+        self.component_status = 'CANCELLED'
+    
+    @hybrid_property
+    def is_component_completed(self):
+        """Check if component is completed"""
+        return self.component_status == 'COMPLETED'
+    
+    @hybrid_property
+    def component_duration(self):
+        """Calculate component production duration in hours"""
+        if self.started_at and self.completed_at:
+            return (self.completed_at - self.started_at).total_seconds() / 3600
+        elif self.started_at:
+            return (datetime.now() - self.started_at).total_seconds() / 3600
+        return None
     
     def __repr__(self):
         return (f"<ProductionOrderComponent(id={self.po_component_id}, "
@@ -456,3 +516,242 @@ Index('idx_production_capacity_planning',
 Index('idx_production_completion_tracking', 
       ProductionOrder.actual_completion_date.desc(), ProductionOrder.status,
       postgresql_where="status IN ('COMPLETED', 'IN_PROGRESS')")
+
+
+class StockReservation(BaseModel, AuditMixin):
+    """
+    Stock reservations for production planning and advanced MRP functionality.
+    Reserves specific quantities of inventory for production orders before actual allocation.
+    """
+    __tablename__ = 'stock_reservations'
+    __table_args__ = (
+        CheckConstraint(
+            "reserved_quantity > 0",
+            name='chk_stock_reservation_quantity'
+        ),
+        CheckConstraint(
+            "reserved_for_type IN ('PRODUCTION_ORDER', 'PLANNING', 'FORECAST')",
+            name='chk_stock_reservation_type'
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE', 'CONSUMED', 'RELEASED', 'EXPIRED')",
+            name='chk_stock_reservation_status'
+        ),
+        CheckConstraint(
+            "expiry_date IS NULL OR expiry_date > reservation_date",
+            name='chk_stock_reservation_dates'
+        ),
+        # Performance indexes
+        Index('idx_stock_reservations_product', 'product_id', 'warehouse_id', 'status'),
+        Index('idx_stock_reservations_reference', 'reserved_for_type', 'reserved_for_id'),
+        Index('idx_stock_reservations_expiry', 'expiry_date', 'status',
+              postgresql_where="status = 'ACTIVE'"),
+    )
+    
+    reservation_id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey('products.product_id', ondelete='CASCADE'), 
+                       nullable=False)
+    warehouse_id = Column(Integer, ForeignKey('warehouses.warehouse_id', ondelete='CASCADE'), 
+                         nullable=False)
+    reserved_quantity = QuantityColumn.create('reserved_quantity', nullable=False)
+    
+    reserved_for_type = Column(String(30), nullable=False,
+                              comment="Type of entity this reservation is for: PRODUCTION_ORDER, PLANNING, FORECAST")
+    reserved_for_id = Column(Integer, nullable=False,
+                            comment="ID of the entity this reservation is for")
+    
+    reservation_date = Column(DateTime, nullable=False, default=datetime.now)
+    expiry_date = Column(DateTime, nullable=True,
+                        comment="When this reservation expires (optional)")
+    status = Column(String(20), default='ACTIVE',
+                   comment="Reservation status: ACTIVE, CONSUMED, RELEASED, EXPIRED")
+    
+    notes = Column(Text, comment="Additional notes about this reservation")
+    reserved_by = Column(String(100), comment="User who created this reservation")
+    
+    # Relationships
+    product = relationship("Product", back_populates="stock_reservations")
+    warehouse = relationship("Warehouse", back_populates="stock_reservations")
+    
+    @validates('reserved_quantity')
+    def validate_reserved_quantity(self, key, reserved_quantity):
+        if reserved_quantity is None or reserved_quantity <= 0:
+            raise ValueError("reserved_quantity must be greater than zero")
+        return reserved_quantity
+    
+    @validates('reserved_for_type')
+    def validate_reserved_for_type(self, key, reserved_for_type):
+        valid_types = {'PRODUCTION_ORDER', 'PLANNING', 'FORECAST'}
+        if reserved_for_type not in valid_types:
+            raise ValueError(f"reserved_for_type must be one of: {valid_types}")
+        return reserved_for_type
+    
+    @validates('status')
+    def validate_status(self, key, status):
+        valid_statuses = {'ACTIVE', 'CONSUMED', 'RELEASED', 'EXPIRED'}
+        if status not in valid_statuses:
+            raise ValueError(f"status must be one of: {valid_statuses}")
+        return status
+    
+    @validates('expiry_date')
+    def validate_expiry_date(self, key, expiry_date):
+        if expiry_date and self.reservation_date and expiry_date <= self.reservation_date:
+            raise ValueError("expiry_date must be after reservation_date")
+        return expiry_date
+    
+    @hybrid_property
+    def is_expired(self):
+        """Check if reservation is expired"""
+        return (self.expiry_date is not None and 
+                self.expiry_date <= datetime.now())
+    
+    @hybrid_property
+    def days_until_expiry(self):
+        """Calculate days until expiry"""
+        if self.expiry_date:
+            return (self.expiry_date - datetime.now()).days
+        return None
+    
+    def release_reservation(self):
+        """Release this reservation (make quantity available again)"""
+        self.status = 'RELEASED'
+        self.updated_at = datetime.now()
+    
+    def consume_reservation(self):
+        """Mark this reservation as consumed"""
+        self.status = 'CONSUMED'
+        self.updated_at = datetime.now()
+    
+    def extend_expiry(self, new_expiry_date: datetime):
+        """Extend the expiry date of this reservation"""
+        if new_expiry_date <= datetime.now():
+            raise ValueError("New expiry date must be in the future")
+        self.expiry_date = new_expiry_date
+        self.updated_at = datetime.now()
+    
+    def __repr__(self):
+        return (f"<StockReservation(id={self.reservation_id}, "
+                f"product_id={self.product_id}, qty={self.reserved_quantity}, "
+                f"status='{self.status}')>")
+
+
+class ProductionDependency(BaseModel):
+    """
+    Production dependencies for nested production orders in complex MRP scenarios.
+    Tracks relationships between production orders where one depends on another.
+    """
+    __tablename__ = 'production_dependencies'
+    __table_args__ = (
+        CheckConstraint(
+            "dependency_quantity > 0",
+            name='chk_production_dependency_quantity'
+        ),
+        CheckConstraint(
+            "dependency_type IN ('COMPONENT', 'SEQUENCE', 'RESOURCE', 'SETUP')",
+            name='chk_production_dependency_type'
+        ),
+        CheckConstraint(
+            "status IN ('PENDING', 'SATISFIED', 'BLOCKED', 'CANCELLED')",
+            name='chk_production_dependency_status'
+        ),
+        CheckConstraint(
+            "parent_production_order_id != dependent_production_order_id",
+            name='chk_production_dependency_different_orders'
+        ),
+        # Performance indexes
+        Index('idx_production_dependencies_parent', 'parent_production_order_id'),
+        Index('idx_production_dependencies_dependent', 'dependent_production_order_id'),
+        Index('idx_production_dependencies_status', 'status', 'dependency_type'),
+    )
+    
+    dependency_id = Column(Integer, primary_key=True)
+    parent_production_order_id = Column(Integer, 
+                                       ForeignKey('production_orders.production_order_id', ondelete='CASCADE'), 
+                                       nullable=False)
+    dependent_production_order_id = Column(Integer, 
+                                          ForeignKey('production_orders.production_order_id', ondelete='CASCADE'), 
+                                          nullable=False)
+    
+    dependency_type = Column(String(20), default='COMPONENT',
+                            comment="Type of dependency: COMPONENT, SEQUENCE, RESOURCE, SETUP")
+    dependency_quantity = QuantityColumn.create('dependency_quantity', nullable=False)
+    
+    status = Column(String(20), default='PENDING',
+                   comment="Dependency status: PENDING, SATISFIED, BLOCKED, CANCELLED")
+    
+    required_by_date = Column(DateTime, nullable=True,
+                             comment="When this dependency must be satisfied")
+    satisfied_at = Column(DateTime, nullable=True,
+                         comment="When this dependency was satisfied")
+    
+    notes = Column(Text, comment="Additional notes about this dependency")
+    
+    # Relationships
+    parent_production_order = relationship("ProductionOrder", 
+                                          foreign_keys=[parent_production_order_id],
+                                          back_populates="dependent_orders")
+    dependent_production_order = relationship("ProductionOrder", 
+                                             foreign_keys=[dependent_production_order_id],
+                                             back_populates="dependency_orders")
+    
+    @validates('dependency_quantity')
+    def validate_dependency_quantity(self, key, dependency_quantity):
+        if dependency_quantity is None or dependency_quantity <= 0:
+            raise ValueError("dependency_quantity must be greater than zero")
+        return dependency_quantity
+    
+    @validates('dependency_type')
+    def validate_dependency_type(self, key, dependency_type):
+        valid_types = {'COMPONENT', 'SEQUENCE', 'RESOURCE', 'SETUP'}
+        if dependency_type not in valid_types:
+            raise ValueError(f"dependency_type must be one of: {valid_types}")
+        return dependency_type
+    
+    @validates('status')
+    def validate_status(self, key, status):
+        valid_statuses = {'PENDING', 'SATISFIED', 'BLOCKED', 'CANCELLED'}
+        if status not in valid_statuses:
+            raise ValueError(f"status must be one of: {valid_statuses}")
+        return status
+    
+    @validates('required_by_date')
+    def validate_required_by_date(self, key, required_by_date):
+        if required_by_date and required_by_date <= datetime.now():
+            raise ValueError("required_by_date must be in the future")
+        return required_by_date
+    
+    @hybrid_property
+    def is_overdue(self):
+        """Check if dependency is overdue"""
+        return (self.required_by_date is not None and 
+                self.required_by_date < datetime.now() and
+                self.status == 'PENDING')
+    
+    @hybrid_property
+    def is_satisfied(self):
+        """Check if dependency is satisfied"""
+        return self.status == 'SATISFIED'
+    
+    def satisfy_dependency(self):
+        """Mark this dependency as satisfied"""
+        self.status = 'SATISFIED'
+        self.satisfied_at = datetime.now()
+    
+    def block_dependency(self, reason: str = None):
+        """Mark this dependency as blocked"""
+        self.status = 'BLOCKED'
+        if reason:
+            current_notes = self.notes or ""
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            block_note = f"\n[{timestamp}] Blocked: {reason}"
+            self.notes = current_notes + block_note
+    
+    def cancel_dependency(self):
+        """Cancel this dependency"""
+        self.status = 'CANCELLED'
+    
+    def __repr__(self):
+        return (f"<ProductionDependency(id={self.dependency_id}, "
+                f"parent={self.parent_production_order_id}, "
+                f"dependent={self.dependent_production_order_id}, "
+                f"type='{self.dependency_type}', status='{self.status}')>")

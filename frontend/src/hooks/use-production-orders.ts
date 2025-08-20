@@ -2,10 +2,17 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '@/lib/api-client';
 import { 
   ProductionOrder, 
-  CreateProductionOrderRequest, 
+  CreateProductionOrderRequest,
+  CreateProductionOrderWithAnalysisRequest,
+  CreateProductionOrderWithAnalysisResponse,
   UpdateProductionOrderRequest, 
   ProductionOrderFilters, 
-  PaginatedResponse 
+  PaginatedResponse,
+  ProductionOrderStockAnalysis,
+  EnhancedProductionOrder,
+  ProductionOrderComponent,
+  UpdateComponentStatusRequest,
+  StockReservation
 } from '@/types/api';
 
 export function useProductionOrders(filters?: ProductionOrderFilters) {
@@ -71,6 +78,120 @@ export function useDeleteProductionOrder() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+    },
+  });
+}
+
+// Advanced MRP hooks
+
+// Stock analysis for production orders
+export function useProductionOrderStockAnalysis(id: number) {
+  return useQuery({
+    queryKey: ['production-orders', id, 'stock-analysis'],
+    queryFn: async () => {
+      const response = await apiClient.get<ProductionOrderStockAnalysis>(
+        `/production-orders/${id}/stock-analysis`
+      );
+      return response.data;
+    },
+    enabled: !!id,
+  });
+}
+
+// Advanced production order creation with analysis
+export function useCreateProductionOrderWithAnalysis() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: CreateProductionOrderWithAnalysisRequest) => {
+      const response = await apiClient.post<CreateProductionOrderWithAnalysisResponse>(
+        '/production-orders/create-with-analysis',
+        data
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+    },
+  });
+}
+
+// Get enhanced production order with components and reservations
+export function useEnhancedProductionOrder(id: number) {
+  return useQuery({
+    queryKey: ['production-orders', id, 'enhanced'],
+    queryFn: async () => {
+      const response = await apiClient.get<EnhancedProductionOrder>(
+        `/production-orders/${id}/enhanced`
+      );
+      return response.data;
+    },
+    enabled: !!id,
+  });
+}
+
+// Component management
+export function useProductionOrderComponents(productionOrderId: number) {
+  return useQuery({
+    queryKey: ['production-orders', productionOrderId, 'components'],
+    queryFn: async () => {
+      const response = await apiClient.get<ProductionOrderComponent[]>(
+        `/production-orders/${productionOrderId}/components`
+      );
+      return response.data;
+    },
+    enabled: !!productionOrderId,
+  });
+}
+
+export function useUpdateComponentStatus() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ 
+      productionOrderId, 
+      data 
+    }: { 
+      productionOrderId: number; 
+      data: UpdateComponentStatusRequest 
+    }) => {
+      const response = await apiClient.put(
+        `/production-orders/${productionOrderId}/components/${data.component_id}`,
+        data
+      );
+      return response.data;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ 
+        queryKey: ['production-orders', variables.productionOrderId, 'components'] 
+      });
+      queryClient.invalidateQueries({ 
+        queryKey: ['production-orders', variables.productionOrderId, 'enhanced'] 
+      });
+    },
+  });
+}
+
+// Stock reservations
+export function useProductionOrderReservations(productionOrderId: number) {
+  return useQuery({
+    queryKey: ['production-orders', productionOrderId, 'reservations'],
+    queryFn: async () => {
+      const response = await apiClient.get<StockReservation[]>(
+        `/production-orders/${productionOrderId}/reservations`
+      );
+      return response.data;
+    },
+    enabled: !!productionOrderId,
+  });
+}
+
+// Stock analysis without creating production order
+export function useAnalyzeStockAvailability() {
+  return useMutation({
+    mutationFn: async (data: { bom_id: number; warehouse_id: number; quantity_to_produce: number }) => {
+      const response = await apiClient.post<any>('/production-orders/analyze-stock', data);
+      return response.data;
     },
   });
 }
