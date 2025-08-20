@@ -23,7 +23,7 @@ from app.schemas.production import (
 )
 from app.services.mrp_analysis import MRPAnalysisService, StockAnalysisResult, ProductionPlanNode
 from app.exceptions import NotFoundError, ProductionOrderError
-from models.production import ProductionOrder, ProductionOrderComponent, StockAllocation
+from models.production import ProductionOrder, ProductionOrderComponent, StockAllocation, StockReservation
 from models.bom import BillOfMaterials, BomComponent
 from models.master_data import Product, Warehouse
 from models.inventory import InventoryItem
@@ -464,7 +464,7 @@ def delete_production_order(
     session: Session = Depends(get_db),
     # current_user: UserInfo = Depends(require_permissions("delete:production"))  # Temporarily disabled for testing
 ):
-    """Delete production order."""
+    """Delete production order with stock reservation cleanup."""
     # Get production order
     production_order = session.query(ProductionOrder).filter(
         ProductionOrder.production_order_id == order_id
@@ -481,13 +481,25 @@ def delete_production_order(
         )
     
     try:
+        # Initialize MRP service for stock operations
+        mrp_service = MRPAnalysisService(session)
+        
+        # Release any stock reservations before deleting
+        released_count = 0
+        try:
+            released_count = mrp_service.release_stock_reservations(order_id)
+        except Exception as e:
+            print(f"Warning: Failed to release reservations for order {order_id}: {str(e)}")
+        
         # Delete the order (cascading will handle components and allocations)
         session.delete(production_order)
         session.commit()
         
-        return MessageResponse(
-            message=f"Production order {production_order.order_number} deleted successfully"
-        )
+        message = f"Production order {production_order.order_number} deleted successfully"
+        if released_count > 0:
+            message += f" with {released_count} stock reservations released"
+        
+        return MessageResponse(message=message)
         
     except Exception as e:
         session.rollback()
@@ -502,9 +514,11 @@ def update_production_order_status(
     # current_user: UserInfo = Depends(require_permissions("write:production"))  # Temporarily disabled for testing
 ):
     """
-    Update production order status.
+    Update production order status with stock operations.
     
-    Manages status transitions and triggers appropriate workflows.
+    Manages status transitions and triggers appropriate workflows including:
+    - Stock consumption when status changes to COMPLETED
+    - Stock reservations when status changes to RELEASED
     """
     # Get production order
     production_order = session.query(ProductionOrder).filter(
@@ -534,10 +548,68 @@ def update_production_order_status(
                 detail=f"Invalid status transition from {old_status} to {new_status}"
             )
         
-        # Handle specific status changes
-        if new_status == 'IN_PROGRESS' and old_status == 'RELEASED':
-            production_order.start_production()
+        # Initialize MRP service for stock operations
+        mrp_service = MRPAnalysisService(session)
         
+        # Handle specific status changes with stock operations
+        if new_status == 'COMPLETED' and old_status in ['IN_PROGRESS', 'RELEASED']:
+            # Consume reserved stock using FIFO
+            try:
+                consumption_records = mrp_service.consume_stock_for_production(order_id)
+                
+                # Add consumption note
+                consumption_summary = f"Consumed {len(consumption_records)} stock batches"
+                if status_update.notes:
+                    status_update.notes += f" | {consumption_summary}"
+                else:
+                    status_update.notes = consumption_summary
+                    
+                # Mark production as completed
+                production_order.actual_completion_date = date.today()
+                
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot complete production: {str(e)}"
+                )
+        
+        elif new_status == 'RELEASED' and old_status == 'PLANNED':
+            # Reserve stock when releasing for production
+            try:
+                reservations = mrp_service.reserve_stock_for_production(order_id, "SYSTEM")
+                
+                # Add reservation note
+                reservation_summary = f"Reserved stock for {len(reservations)} components"
+                if status_update.notes:
+                    status_update.notes += f" | {reservation_summary}"
+                else:
+                    status_update.notes = reservation_summary
+                    
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot reserve stock for production: {str(e)}"
+                )
+        
+        elif new_status == 'IN_PROGRESS' and old_status == 'RELEASED':
+            production_order.start_production()
+            production_order.actual_start_date = date.today()
+        
+        elif new_status == 'CANCELLED' and old_status in ['PLANNED', 'RELEASED', 'IN_PROGRESS', 'ON_HOLD']:
+            # Release stock reservations when cancelling
+            try:
+                released_count = mrp_service.release_stock_reservations(order_id)
+                if released_count > 0:
+                    cancellation_summary = f"Released {released_count} stock reservations"
+                    if status_update.notes:
+                        status_update.notes += f" | {cancellation_summary}"
+                    else:
+                        status_update.notes = cancellation_summary
+            except Exception as e:
+                # Don't fail the cancellation if reservation release fails
+                print(f"Warning: Failed to release reservations for order {order_id}: {str(e)}")
+        
+        # Update the status
         production_order.status = new_status
         
         # Add notes if provided
@@ -800,7 +872,16 @@ def create_production_order_with_analysis(
         main_order_id = main_order_response.id
         
         dependent_orders = []
+        nested_orders_created = []  # Frontend expects this
         production_tree = None
+        warnings = []  # Frontend expects this
+        
+        # Add warnings for shortages
+        if analysis_result.shortage_exists:
+            if analysis_result.semi_finished_shortages:
+                warnings.append(f"{len(analysis_result.semi_finished_shortages)} semi-finished products are short")
+            if analysis_result.raw_material_shortages:
+                warnings.append(f"{len(analysis_result.raw_material_shortages)} raw materials are short")
         
         if auto_create_dependencies and analysis_result.semi_finished_shortages:
             # Create nested production plan
@@ -817,11 +898,23 @@ def create_production_order_with_analysis(
             dependent_orders = _create_dependent_orders(
                 production_tree, session, main_order_id
             )
+            
+            # Format nested orders for frontend
+            nested_orders_created = [{
+                "production_order_id": order["production_order_id"],
+                "order_number": order["order_number"],
+                "product_name": order["product_name"],
+                "planned_quantity": float(order["planned_quantity"])
+            } for order in dependent_orders]
         
-        # Reserve stock for the main production order
-        reservations = mrp_service.reserve_stock_for_production(
-            main_order_id, "SYSTEM"
-        )
+        # Try to reserve stock for the main production order
+        reservations = []
+        try:
+            reservations = mrp_service.reserve_stock_for_production(
+                main_order_id, "SYSTEM"
+            )
+        except ValueError as e:
+            warnings.append(f"Stock reservation failed: {str(e)}")
         
         session.commit()
         
@@ -838,6 +931,8 @@ def create_production_order_with_analysis(
                 "total_estimated_cost": analysis_result.total_estimated_cost
             },
             "dependent_orders": dependent_orders,
+            "nested_orders_created": nested_orders_created,  # Frontend expects this
+            "warnings": warnings,  # Frontend expects this
             "stock_reservations": len(reservations),
             "production_tree": _format_production_tree(production_tree) if production_tree else None
         }
@@ -1099,6 +1194,243 @@ def cancel_production_order_with_cleanup(
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to cancel production order: {str(e)}")
+
+
+@router.get("/{order_id}/enhanced", response_model=Dict)
+def get_enhanced_production_order(
+    order_id: int = Path(..., description="Production order ID"),
+    session: Session = Depends(get_db),
+    # current_user: UserInfo = Depends(require_permissions("read:production"))  # Temporarily disabled for testing
+):
+    """
+    Get enhanced production order details with comprehensive information.
+    
+    Returns production order with stock analysis, reservations, and component details.
+    """
+    # Get production order with all related data
+    production_order = session.query(ProductionOrder).options(
+        joinedload(ProductionOrder.product),
+        joinedload(ProductionOrder.bom),
+        joinedload(ProductionOrder.warehouse),
+        joinedload(ProductionOrder.production_order_components).joinedload(
+            ProductionOrderComponent.component_product
+        )
+    ).filter(ProductionOrder.production_order_id == order_id).first()
+    
+    if not production_order:
+        raise NotFoundError("Production Order", order_id)
+    
+    try:
+        # Initialize MRP analysis service
+        mrp_service = MRPAnalysisService(session)
+        
+        # Get stock analysis for current state
+        analysis_result = mrp_service.analyze_stock_availability(
+            product_id=production_order.product_id,
+            bom_id=production_order.bom_id,
+            planned_quantity=production_order.planned_quantity,
+            warehouse_id=production_order.warehouse_id,
+            production_order_id=order_id
+        )
+        
+        # Get active stock reservations
+        reservations = session.query(StockReservation).filter(
+            and_(
+                StockReservation.reserved_for_type == 'PRODUCTION_ORDER',
+                StockReservation.reserved_for_id == order_id,
+                StockReservation.status == 'ACTIVE'
+            )
+        ).all()
+        
+        # Build enhanced response
+        enhanced_order = {
+            'production_order_id': production_order.production_order_id,
+            'order_number': production_order.order_number,
+            'product_id': production_order.product_id,
+            'bom_id': production_order.bom_id,
+            'warehouse_id': production_order.warehouse_id,
+            'order_date': production_order.order_date.isoformat() if production_order.order_date else None,
+            'planned_start_date': production_order.planned_start_date.isoformat() if production_order.planned_start_date else None,
+            'planned_completion_date': production_order.planned_completion_date.isoformat() if production_order.planned_completion_date else None,
+            'actual_start_date': production_order.actual_start_date.isoformat() if production_order.actual_start_date else None,
+            'actual_completion_date': production_order.actual_completion_date.isoformat() if production_order.actual_completion_date else None,
+            'planned_quantity': float(production_order.planned_quantity),
+            'completed_quantity': float(production_order.completed_quantity),
+            'scrapped_quantity': float(production_order.scrapped_quantity),
+            'status': production_order.status,
+            'priority': production_order.priority,
+            'estimated_cost': float(production_order.estimated_cost),
+            'actual_cost': float(production_order.actual_cost),
+            'notes': production_order.notes,
+            'created_at': production_order.created_at.isoformat() if production_order.created_at else None,
+            'updated_at': production_order.updated_at.isoformat() if production_order.updated_at else None,
+            'remaining_quantity': float(production_order.remaining_quantity) if production_order.remaining_quantity else 0.0,
+            'completion_percentage': float(production_order.completion_percentage) if production_order.completion_percentage else 0.0,
+            'is_overdue': production_order.is_overdue,
+            'is_ready_for_production': production_order.is_ready_for_production,
+            'product': {
+                'product_id': production_order.product.product_id,
+                'product_code': production_order.product.product_code,
+                'product_name': production_order.product.product_name,
+                'unit_of_measure': production_order.product.unit_of_measure
+            } if production_order.product else None,
+            'bom': {
+                'bom_id': production_order.bom.bom_id,
+                'bom_name': production_order.bom.bom_name,
+                'bom_version': production_order.bom.bom_version,
+                'base_quantity': production_order.bom.base_quantity
+            } if production_order.bom else None,
+            'warehouse': {
+                'warehouse_id': production_order.warehouse.warehouse_id,
+                'warehouse_code': production_order.warehouse.warehouse_code,
+                'warehouse_name': production_order.warehouse.warehouse_name
+            } if production_order.warehouse else None,
+            'stock_analysis': {
+                'can_produce': analysis_result.can_produce,
+                'shortage_exists': analysis_result.shortage_exists,
+                'component_requirements': [{
+                    'product_id': comp.product_id,
+                    'product_code': comp.product_code,
+                    'product_name': comp.product_name,
+                    'required_quantity': float(comp.required_quantity),
+                    'available_quantity': float(comp.available_quantity),
+                    'shortage_quantity': float(comp.shortage_quantity),
+                    'unit_cost': float(comp.unit_cost),
+                    'is_semi_finished': comp.is_semi_finished
+                } for comp in analysis_result.component_requirements],
+                'total_estimated_cost': float(analysis_result.total_estimated_cost)
+            },
+            'stock_reservations': [{
+                'reservation_id': res.reservation_id,
+                'product_id': res.product_id,
+                'warehouse_id': res.warehouse_id,
+                'reserved_quantity': float(res.reserved_quantity),
+                'status': res.status,
+                'reservation_date': res.reservation_date.isoformat() if res.reservation_date else None,
+                'reserved_by': res.reserved_by
+            } for res in reservations],
+            'production_order_components': [{
+                'po_component_id': comp.po_component_id,
+                'component_product_id': comp.component_product_id,
+                'required_quantity': float(comp.required_quantity),
+                'allocated_quantity': float(comp.allocated_quantity),
+                'consumed_quantity': float(comp.consumed_quantity),
+                'unit_cost': float(comp.unit_cost),
+                'allocation_status': comp.allocation_status,
+                'component_product': {
+                    'product_id': comp.component_product.product_id,
+                    'product_code': comp.component_product.product_code,
+                    'product_name': comp.component_product.product_name,
+                    'unit_of_measure': comp.component_product.unit_of_measure
+                } if comp.component_product else None
+            } for comp in production_order.production_order_components]
+        }
+        
+        return enhanced_order
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get enhanced production order: {str(e)}")
+
+
+@router.get("/{order_id}/reservations", response_model=Dict)
+def get_production_order_reservations(
+    order_id: int = Path(..., description="Production order ID"),
+    session: Session = Depends(get_db),
+    # current_user: UserInfo = Depends(require_permissions("read:production"))  # Temporarily disabled for testing
+):
+    """
+    Get stock reservations for a production order.
+    
+    Returns detailed information about stock reservations including inventory items.
+    """
+    # Check if production order exists
+    production_order = session.query(ProductionOrder).filter(
+        ProductionOrder.production_order_id == order_id
+    ).first()
+    
+    if not production_order:
+        raise NotFoundError("Production Order", order_id)
+    
+    try:
+        # Get all reservations for this production order
+        reservations = session.query(StockReservation).filter(
+            and_(
+                StockReservation.reserved_for_type == 'PRODUCTION_ORDER',
+                StockReservation.reserved_for_id == order_id
+            )
+        ).order_by(StockReservation.reservation_date).all()
+        
+        # Group reservations by product
+        reservations_by_product = {}
+        total_reservations = 0
+        active_reservations = 0
+        consumed_reservations = 0
+        
+        for res in reservations:
+            product_id = res.product_id
+            
+            if product_id not in reservations_by_product:
+                # Get product information
+                product = session.query(Product).get(product_id)
+                reservations_by_product[product_id] = {
+                    'product': {
+                        'product_id': product_id,
+                        'product_code': product.product_code if product else 'UNKNOWN',
+                        'product_name': product.product_name if product else 'Unknown Product'
+                    },
+                    'reservations': [],
+                    'total_reserved': Decimal('0'),
+                    'total_consumed': Decimal('0'),
+                    'active_count': 0,
+                    'consumed_count': 0
+                }
+            
+            # Add reservation details
+            reservations_by_product[product_id]['reservations'].append({
+                'reservation_id': res.reservation_id,
+                'warehouse_id': res.warehouse_id,
+                'reserved_quantity': float(res.reserved_quantity),
+                'status': res.status,
+                'reservation_date': res.reservation_date.isoformat() if res.reservation_date else None,
+                'expiry_date': res.expiry_date.isoformat() if res.expiry_date else None,
+                'reserved_by': res.reserved_by,
+                'notes': res.notes
+            })
+            
+            # Update totals
+            if res.status == 'ACTIVE':
+                reservations_by_product[product_id]['total_reserved'] += res.reserved_quantity
+                reservations_by_product[product_id]['active_count'] += 1
+                active_reservations += 1
+            elif res.status == 'CONSUMED':
+                reservations_by_product[product_id]['total_consumed'] += res.reserved_quantity
+                reservations_by_product[product_id]['consumed_count'] += 1
+                consumed_reservations += 1
+            
+            total_reservations += 1
+        
+        # Convert to list format
+        reservation_details = [{
+            **details,
+            'total_reserved': float(details['total_reserved']),
+            'total_consumed': float(details['total_consumed'])
+        } for details in reservations_by_product.values()]
+        
+        return {
+            'production_order_id': order_id,
+            'order_number': production_order.order_number,
+            'status': production_order.status,
+            'reservation_summary': {
+                'total_reservations': total_reservations,
+                'active_reservations': active_reservations,
+                'consumed_reservations': consumed_reservations,
+                'products_with_reservations': len(reservations_by_product)
+            },
+            'reservations_by_product': reservation_details
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get production order reservations: {str(e)}")
 
 
 @router.get("/{order_id}/production-tree", response_model=Dict)

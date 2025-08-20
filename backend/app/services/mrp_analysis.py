@@ -626,3 +626,266 @@ class MRPAnalysisService:
             self._update_component_allocation(production_order_id, component_product_id, Decimal('0'))
         
         return released_count
+    
+    def consume_stock_for_production(
+        self,
+        production_order_id: int
+    ) -> List[Dict]:
+        """
+        Consume reserved stock for a production order using FIFO principles.
+        This method is called when production order status changes to COMPLETED.
+        
+        Args:
+            production_order_id: ID of the production order
+            
+        Returns:
+            List of consumption records
+        """
+        # Get all active reservations for this production order
+        reservations = self.session.query(StockReservation).filter(
+            and_(
+                StockReservation.reserved_for_type == 'PRODUCTION_ORDER',
+                StockReservation.reserved_for_id == production_order_id,
+                StockReservation.status == 'ACTIVE'
+            )
+        ).all()
+        
+        if not reservations:
+            raise ValueError(f"No active stock reservations found for production order {production_order_id}")
+        
+        consumption_records = []
+        
+        # Track component products that need their status updated
+        component_products_consumed = set()
+        
+        for reservation in reservations:
+            # Track this component for status update
+            component_products_consumed.add(reservation.product_id)
+            
+            # Find inventory items to consume from in FIFO order
+            inventory_items = self.session.query(InventoryItem).filter(
+                and_(
+                    InventoryItem.product_id == reservation.product_id,
+                    InventoryItem.warehouse_id == reservation.warehouse_id,
+                    InventoryItem.reserved_quantity >= reservation.reserved_quantity
+                )
+            ).order_by(InventoryItem.entry_date).all()
+            
+            remaining_to_consume = reservation.reserved_quantity
+            
+            for item in inventory_items:
+                if remaining_to_consume <= 0:
+                    break
+                
+                # Calculate how much we can consume from this batch
+                consume_qty = min(remaining_to_consume, item.reserved_quantity)
+                
+                # Update inventory item quantities (FIFO consumption)
+                item.quantity_in_stock -= consume_qty
+                item.reserved_quantity -= consume_qty
+                
+                # Record consumption for audit trail
+                consumption_record = {
+                    'product_id': reservation.product_id,
+                    'warehouse_id': item.warehouse_id,
+                    'inventory_item_id': item.inventory_item_id,
+                    'consumed_quantity': consume_qty,
+                    'unit_cost': item.unit_cost,
+                    'total_cost': item.unit_cost * consume_qty,
+                    'batch_number': item.batch_number,
+                    'entry_date': item.entry_date,
+                    'consumption_date': datetime.now()
+                }
+                consumption_records.append(consumption_record)
+                
+                remaining_to_consume -= consume_qty
+            
+            if remaining_to_consume > 0:
+                raise ValueError(
+                    f"Could not fully consume reservation for product {reservation.product_id}. "
+                    f"Missing quantity: {remaining_to_consume}"
+                )
+            
+            # Mark reservation as consumed
+            reservation.consume_reservation()
+        
+        # Update component status to CONSUMED
+        for component_product_id in component_products_consumed:
+            self._update_component_status_to_consumed(production_order_id, component_product_id)
+        
+        return consumption_records
+    
+    def adjust_stock_reservations_for_quantity_change(
+        self,
+        production_order_id: int,
+        old_quantity: Decimal,
+        new_quantity: Decimal
+    ) -> Dict:
+        """
+        Adjust stock reservations when production order quantity changes.
+        
+        Args:
+            production_order_id: ID of the production order
+            old_quantity: Previous planned quantity
+            new_quantity: New planned quantity
+            
+        Returns:
+            Summary of adjustments made
+        """
+        if old_quantity == new_quantity:
+            return {'message': 'No quantity change detected'}
+        
+        # Get production order to validate
+        production_order = self.session.query(ProductionOrder).get(production_order_id)
+        if not production_order:
+            raise ValueError(f"Production order {production_order_id} not found")
+        
+        if production_order.status not in ['PLANNED', 'RELEASED']:
+            raise ValueError(f"Cannot adjust reservations for production order in {production_order.status} status")
+        
+        quantity_ratio = new_quantity / old_quantity
+        
+        # Get all active reservations for this production order
+        reservations = self.session.query(StockReservation).filter(
+            and_(
+                StockReservation.reserved_for_type == 'PRODUCTION_ORDER',
+                StockReservation.reserved_for_id == production_order_id,
+                StockReservation.status == 'ACTIVE'
+            )
+        ).all()
+        
+        adjustments = []
+        
+        if new_quantity > old_quantity:
+            # Quantity increased - need to reserve more stock
+            for reservation in reservations:
+                old_reserved_qty = reservation.reserved_quantity
+                new_reserved_qty = old_reserved_qty * quantity_ratio
+                additional_qty_needed = new_reserved_qty - old_reserved_qty
+                
+                try:
+                    # Try to reserve additional stock for this product
+                    additional_reservations = self._reserve_component_stock(
+                        reservation.product_id,
+                        additional_qty_needed,
+                        production_order.warehouse_id,
+                        production_order_id,
+                        reservation.reserved_by
+                    )
+                    
+                    adjustments.append({
+                        'product_id': reservation.product_id,
+                        'action': 'INCREASED',
+                        'old_quantity': old_reserved_qty,
+                        'new_quantity': new_reserved_qty,
+                        'additional_reservations': len(additional_reservations)
+                    })
+                    
+                except ValueError as e:
+                    # Could not reserve additional stock
+                    adjustments.append({
+                        'product_id': reservation.product_id,
+                        'action': 'INSUFFICIENT_STOCK',
+                        'old_quantity': old_reserved_qty,
+                        'requested_quantity': new_reserved_qty,
+                        'error': str(e)
+                    })
+        
+        else:
+            # Quantity decreased - release excess stock
+            for reservation in reservations:
+                old_reserved_qty = reservation.reserved_quantity
+                new_reserved_qty = old_reserved_qty * quantity_ratio
+                excess_qty = old_reserved_qty - new_reserved_qty
+                
+                # Release excess quantity from inventory items
+                inventory_items = self.session.query(InventoryItem).filter(
+                    and_(
+                        InventoryItem.product_id == reservation.product_id,
+                        InventoryItem.warehouse_id == reservation.warehouse_id,
+                        InventoryItem.reserved_quantity > 0
+                    )
+                ).order_by(InventoryItem.entry_date.desc()).all()  # LIFO for release (release most recent first)
+                
+                remaining_to_release = excess_qty
+                
+                for item in inventory_items:
+                    if remaining_to_release <= 0:
+                        break
+                    
+                    release_qty = min(remaining_to_release, item.reserved_quantity)
+                    item.reserved_quantity -= release_qty
+                    remaining_to_release -= release_qty
+                
+                # Update reservation quantity
+                reservation.reserved_quantity = new_reserved_qty
+                
+                adjustments.append({
+                    'product_id': reservation.product_id,
+                    'action': 'DECREASED',
+                    'old_quantity': old_reserved_qty,
+                    'new_quantity': new_reserved_qty,
+                    'released_quantity': excess_qty
+                })
+        
+        # Update component allocations based on new quantities
+        components = self.session.query(ProductionOrderComponent).filter(
+            ProductionOrderComponent.production_order_id == production_order_id
+        ).all()
+        
+        for component in components:
+            # Recalculate required quantity based on new production quantity
+            bom = self.session.query(BillOfMaterials).get(production_order.bom_id)
+            bom_component = self.session.query(BomComponent).filter(
+                and_(
+                    BomComponent.bom_id == bom.bom_id,
+                    BomComponent.component_product_id == component.component_product_id
+                )
+            ).first()
+            
+            if bom_component:
+                new_required_qty = (Decimal(str(bom_component.quantity_required)) * new_quantity) / Decimal(str(bom.base_quantity))
+                
+                # Apply scrap percentage if defined
+                if bom_component.scrap_percentage and bom_component.scrap_percentage > 0:
+                    scrap_multiplier = Decimal('1') + (Decimal(str(bom_component.scrap_percentage)) / Decimal('100'))
+                    new_required_qty = new_required_qty * scrap_multiplier
+                
+                component.required_quantity = new_required_qty
+                
+                # Update allocation quantities proportionally
+                if component.allocated_quantity > 0:
+                    component.allocated_quantity = component.allocated_quantity * quantity_ratio
+                    component._update_allocation_status()
+        
+        return {
+            'production_order_id': production_order_id,
+            'old_quantity': old_quantity,
+            'new_quantity': new_quantity,
+            'quantity_ratio': float(quantity_ratio),
+            'adjustments': adjustments
+        }
+    
+    def _update_component_status_to_consumed(
+        self,
+        production_order_id: int,
+        component_product_id: int
+    ):
+        """
+        Update ProductionOrderComponent status to CONSUMED when stock is consumed.
+        
+        Args:
+            production_order_id: ID of the production order
+            component_product_id: ID of the component product
+        """
+        component = self.session.query(ProductionOrderComponent).filter(
+            and_(
+                ProductionOrderComponent.production_order_id == production_order_id,
+                ProductionOrderComponent.component_product_id == component_product_id
+            )
+        ).first()
+        
+        if component:
+            component.consumed_quantity = component.allocated_quantity
+            component.allocation_status = 'CONSUMED'
+            self.session.add(component)

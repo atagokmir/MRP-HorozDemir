@@ -21,7 +21,6 @@ class WarehouseBase(BaseSchema):
     warehouse_type: WarehouseType = Field(..., description="Type of warehouse")
     location: Optional[str] = Field(None, max_length=200, description="Warehouse location/address")
     manager_name: Optional[str] = Field(None, max_length=100, description="Warehouse manager name")
-    description: Optional[str] = Field(None, max_length=500, description="Additional description")
     
     @validator('warehouse_code')
     def validate_warehouse_code_field(cls, v):
@@ -39,7 +38,6 @@ class WarehouseUpdate(BaseSchema):
     warehouse_type: Optional[WarehouseType] = None
     location: Optional[str] = Field(None, max_length=200)
     manager_name: Optional[str] = Field(None, max_length=100)
-    description: Optional[str] = Field(None, max_length=500)
     is_active: Optional[bool] = None
 
 

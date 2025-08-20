@@ -440,7 +440,7 @@ export interface LegacyBOMCostCalculation {
 }
 
 // Production Order Types
-export type ProductionOrderStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+export type ProductionOrderStatus = 'PLANNED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 
 export interface ProductionOrder {
   production_order_id: number;

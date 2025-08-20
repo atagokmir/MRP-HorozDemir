@@ -190,7 +190,7 @@ export function useProductionOrderReservations(productionOrderId: number) {
 export function useAnalyzeStockAvailability() {
   return useMutation({
     mutationFn: async (data: { bom_id: number; warehouse_id: number; quantity_to_produce: number }) => {
-      const response = await apiClient.post<any>('/production-orders/analyze-stock', data);
+      const response = await apiClient.post<ProductionOrderStockAnalysis>('/production-orders/analyze-stock', data);
       return response.data;
     },
   });

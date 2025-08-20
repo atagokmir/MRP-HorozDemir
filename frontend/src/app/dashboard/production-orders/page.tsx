@@ -27,7 +27,7 @@ type ProductionOrderFormData = CreateProductionOrderRequest;
 
 const getStatusColor = (status: ProductionOrderStatus) => {
   switch (status) {
-    case 'PENDING':
+    case 'PLANNED':
       return 'bg-yellow-100 text-yellow-800';
     case 'IN_PROGRESS':
       return 'bg-blue-100 text-blue-800';
@@ -42,7 +42,7 @@ const getStatusColor = (status: ProductionOrderStatus) => {
 
 const getStatusIcon = (status: ProductionOrderStatus) => {
   switch (status) {
-    case 'PENDING':
+    case 'PLANNED':
       return <ClockIcon className="h-4 w-4" />;
     case 'IN_PROGRESS':
       return <PlayIcon className="h-4 w-4" />;
@@ -189,10 +189,16 @@ export default function ProductionOrdersPage() {
       };
 
       if (editingOrder) {
+        const orderId = editingOrder.production_order_id || editingOrder.id;
+        if (!orderId) {
+          throw new Error('Invalid production order ID');
+        }
+        
         await updateOrder.mutateAsync({
-          id: editingOrder.production_order_id || editingOrder.id!,
+          id: orderId,
           data: submitData,
         });
+        alert('Production order updated successfully!');
       } else {
         // Use advanced creation if analysis was done or auto-create is enabled
         if (stockAnalysis || autoCreateMissing) {
@@ -202,26 +208,46 @@ export default function ProductionOrdersPage() {
           };
           const result = await createOrderWithAnalysis.mutateAsync(advancedData);
           
-          // Show result information
-          if (result.nested_orders_created && result.nested_orders_created.length > 0) {
-            alert(`Production order created successfully! ${result.nested_orders_created.length} additional orders were created for missing semi-finished products.`);
+          // Build success message
+          let successMessage = 'Production order created successfully!';
+          
+          // Show result information - safely access nested properties with comprehensive null checks
+          if (result && typeof result === 'object') {
+            if (Array.isArray(result.nested_orders_created) && result.nested_orders_created.length > 0) {
+              successMessage += `\n\n${result.nested_orders_created.length} additional production orders were created for missing semi-finished products.`;
+            }
+            
+            if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+              successMessage += '\n\nWarnings:\n' + result.warnings.join('\n');
+            }
+            
+            if (Array.isArray(result.suggestions) && result.suggestions.length > 0) {
+              successMessage += '\n\nSuggestions:\n' + result.suggestions.join('\n');
+            }
           }
           
-          if (result.warnings && result.warnings.length > 0) {
-            alert('Warnings:\n' + result.warnings.join('\n'));
-          }
+          alert(successMessage);
         } else {
           // Use simple creation
           await createOrder.mutateAsync(submitData);
+          alert('Production order created successfully!');
         }
       }
       handleCloseModal();
     } catch (error) {
-      alert(handleAPIError(error));
+      const errorMessage = handleAPIError(error);
+      alert(`Failed to ${editingOrder ? 'update' : 'create'} production order:\n\n${errorMessage}`);
+      console.error('Production order submission error:', error);
     }
   };
 
   const handleEdit = (order: ProductionOrder) => {
+    // Prevent editing completed orders
+    if (order.status === 'COMPLETED') {
+      alert('Cannot edit completed production orders. Completed orders are locked to maintain data integrity.');
+      return;
+    }
+    
     setEditingOrder(order);
     setFormData({
       product_id: order.product?.product_id || order.product?.id || 0,
@@ -242,28 +268,111 @@ export default function ProductionOrdersPage() {
   };
 
   const handleDelete = async (order: ProductionOrder) => {
-    if (confirm(`Are you sure you want to delete production order "${order.order_number}"?`)) {
+    if (!order) {
+      alert('Invalid production order');
+      return;
+    }
+    
+    // Prevent deleting completed orders
+    if (order.status === 'COMPLETED') {
+      alert('Cannot delete completed production orders. Completed orders are locked to maintain data integrity and audit trail.');
+      return;
+    }
+    
+    const orderId = order.production_order_id || order.id;
+    if (!orderId) {
+      alert('Invalid production order ID');
+      return;
+    }
+    
+    const orderNumber = order.order_number || `Order #${orderId}`;
+    const confirmMessage = `Are you sure you want to delete production order "${orderNumber}"?\n\nThis will also release any stock reservations for this order and cannot be undone.`;
+    
+    if (confirm(confirmMessage)) {
       try {
-        await deleteOrder.mutateAsync(order.production_order_id || order.id!);
+        await deleteOrder.mutateAsync(orderId);
+        alert('Production order deleted successfully. Stock reservations have been released.');
       } catch (error) {
-        alert(handleAPIError(error));
+        const errorMessage = handleAPIError(error);
+        alert(`Failed to delete production order: ${errorMessage}`);
       }
     }
   };
 
   const handleStatusUpdate = async (order: ProductionOrder, newStatus: ProductionOrderStatus) => {
+    if (!order) {
+      alert('Invalid production order');
+      return;
+    }
+    
+    const orderId = order.production_order_id || order.id;
+    if (!orderId) {
+      alert('Invalid production order ID');
+      return;
+    }
+    
+    // Validate status transitions
+    const validTransitions: Record<ProductionOrderStatus, ProductionOrderStatus[]> = {
+      'PLANNED': ['IN_PROGRESS', 'COMPLETED', 'CANCELLED'],
+      'IN_PROGRESS': ['COMPLETED', 'CANCELLED'],
+      'COMPLETED': [], // No transitions allowed from completed
+      'CANCELLED': [] // No transitions allowed from cancelled
+    };
+    
+    if (!validTransitions[order.status]?.includes(newStatus)) {
+      alert(`Invalid status transition: Cannot change from ${order.status} to ${newStatus}`);
+      return;
+    }
+    
+    // Show confirmation for status changes
+    let confirmMessage = `Change status from ${order.status} to ${newStatus}?`;
+    if (newStatus === 'COMPLETED') {
+      confirmMessage += '\n\nThis will consume reserved stock and cannot be undone.';
+    } else if (newStatus === 'CANCELLED') {
+      confirmMessage += '\n\nThis will release all stock reservations.';
+    }
+    
+    if (!confirm(confirmMessage)) {
+      return;
+    }
+    
     try {
       await updateOrder.mutateAsync({
-        id: order.production_order_id || order.id!,
+        id: orderId,
         data: { status: newStatus },
       });
+      
+      // Show success message based on status
+      if (newStatus === 'COMPLETED') {
+        alert('Production order marked as completed. Stock has been consumed and final product added to inventory.');
+      } else if (newStatus === 'CANCELLED') {
+        alert('Production order cancelled. Stock reservations have been released.');
+      } else {
+        alert(`Production order status updated to ${newStatus}.`);
+      }
     } catch (error) {
-      alert(handleAPIError(error));
+      const errorMessage = handleAPIError(error);
+      alert(`Failed to update status: ${errorMessage}`);
     }
   };
 
   const handleComponentStatusUpdate = async (component: ProductionOrderComponent, newStatus: ComponentStatus) => {
-    const orderId = viewingOrder?.production_order_id || viewingOrder?.id!;
+    if (!viewingOrder) {
+      alert('No production order selected');
+      return;
+    }
+    
+    const orderId = viewingOrder.production_order_id || viewingOrder.id;
+    if (!orderId) {
+      alert('Invalid production order ID');
+      return;
+    }
+    
+    if (!component.component_id) {
+      alert('Invalid component ID');
+      return;
+    }
+    
     try {
       await updateComponentStatus.mutateAsync({
         productionOrderId: orderId,
@@ -309,10 +418,18 @@ export default function ProductionOrdersPage() {
       return;
     }
 
+    if (isAnalyzing) {
+      return; // Prevent multiple concurrent analysis requests
+    }
+
     setIsAnalyzing(true);
     setAnalysisError(null);
     try {
-      // Create a temporary analysis request
+      // Create a temporary analysis request with validation
+      if (!formData.bom_id || !formData.warehouse_id || !formData.planned_quantity) {
+        throw new Error('Missing required fields for stock analysis');
+      }
+
       const analysisRequest = {
         bom_id: formData.bom_id,
         warehouse_id: formData.warehouse_id,
@@ -320,13 +437,19 @@ export default function ProductionOrdersPage() {
       };
 
       const analysis = await analyzeStock.mutateAsync(analysisRequest);
-      setStockAnalysis(analysis);
-      setShowStockAnalysis(true);
-      setAnalysisError(null);
+      
+      if (analysis && typeof analysis === 'object') {
+        setStockAnalysis(analysis);
+        setShowStockAnalysis(true);
+        setAnalysisError(null);
+      } else {
+        throw new Error('Invalid analysis response from server');
+      }
     } catch (error) {
       const errorMessage = handleAPIError(error);
       setAnalysisError(errorMessage);
-      alert(errorMessage);
+      alert(`Stock analysis failed: ${errorMessage}`);
+      setShowStockAnalysis(false);
     } finally {
       setIsAnalyzing(false);
     }
@@ -339,6 +462,11 @@ export default function ProductionOrdersPage() {
     setIsAnalyzing(true);
     setAnalysisError(null);
     try {
+      // Validate required fields
+      if (!formData.bom_id || !formData.warehouse_id || !formData.planned_quantity) {
+        return; // Skip auto-analysis if fields are missing
+      }
+
       const analysisRequest = {
         bom_id: formData.bom_id,
         warehouse_id: formData.warehouse_id,
@@ -346,12 +474,18 @@ export default function ProductionOrdersPage() {
       };
 
       const analysis = await analyzeStock.mutateAsync(analysisRequest);
-      setStockAnalysis(analysis);
-      setShowStockAnalysis(true);
-      setAnalysisError(null);
+      
+      if (analysis && typeof analysis === 'object') {
+        setStockAnalysis(analysis);
+        setShowStockAnalysis(true);
+        setAnalysisError(null);
+      } else {
+        setAnalysisError('Invalid analysis response received');
+      }
     } catch (error) {
       // For auto-analysis, just set the error state without alerting
-      setAnalysisError('Auto-analysis failed: Network error');
+      const errorMessage = handleAPIError(error);
+      setAnalysisError(`Auto-analysis failed: ${errorMessage}`);
     } finally {
       setIsAnalyzing(false);
     }
@@ -392,7 +526,7 @@ export default function ProductionOrdersPage() {
       setFormData({
         ...formData,
         bom_id: bomId,
-        product_id: selectedBOM.product.product_id || selectedBOM.product_id,
+        product_id: selectedBOM.product.product_id || selectedBOM.product.id || selectedBOM.product_id || 0,
       });
     } else {
       setFormData({
@@ -422,7 +556,25 @@ export default function ProductionOrdersPage() {
   }, [formData.bom_id, formData.warehouse_id, formData.planned_quantity]);
 
   if (error) {
-    return <div className="text-red-600">Error: {handleAPIError(error)}</div>;
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-md p-4">
+        <div className="flex items-center">
+          <ExclamationTriangleIcon className="h-5 w-5 text-red-600 mr-2" />
+          <div>
+            <h3 className="text-sm font-medium text-red-800">Failed to load production orders</h3>
+            <p className="text-sm text-red-700 mt-1">{handleAPIError(error)}</p>
+          </div>
+        </div>
+        <div className="mt-3">
+          <button
+            onClick={() => window.location.reload()}
+            className="text-sm bg-red-100 text-red-800 px-3 py-1 rounded hover:bg-red-200"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -443,6 +595,28 @@ export default function ProductionOrdersPage() {
           Create Order
         </button>
       </div>
+
+      {/* Status Summary */}
+      {data?.items && data.items.length > 0 && (
+        <div className="bg-white p-4 rounded-lg shadow">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { status: 'PLANNED', label: 'Planned', color: 'text-yellow-600' },
+              { status: 'IN_PROGRESS', label: 'In Progress', color: 'text-blue-600' },
+              { status: 'COMPLETED', label: 'Completed', color: 'text-green-600' },
+              { status: 'CANCELLED', label: 'Cancelled', color: 'text-red-600' }
+            ].map(({ status, label, color }) => {
+              const count = (data?.items && Array.isArray(data.items)) ? data.items.filter(order => order.status === status).length : 0;
+              return (
+                <div key={status} className="text-center">
+                  <div className={`text-2xl font-bold ${color}`}>{count}</div>
+                  <div className="text-sm text-gray-500">{label}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white p-4 rounded-lg shadow space-y-4 sm:space-y-0 sm:flex sm:items-center sm:space-x-4">
@@ -466,7 +640,7 @@ export default function ProductionOrdersPage() {
           className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
         >
           <option value="">All Statuses</option>
-          <option value="PENDING">Pending</option>
+          <option value="PLANNED">Planned</option>
           <option value="IN_PROGRESS">In Progress</option>
           <option value="COMPLETED">Completed</option>
           <option value="CANCELLED">Cancelled</option>
@@ -505,8 +679,11 @@ export default function ProductionOrdersPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="px-6 py-4 text-center">
-                    <div className="animate-pulse">Loading orders...</div>
+                  <td colSpan={7} className="px-6 py-8 text-center">
+                    <div className="flex flex-col items-center space-y-2">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                      <div className="text-sm text-gray-500">Loading production orders...</div>
+                    </div>
                   </td>
                 </tr>
               ) : data?.items?.length === 0 ? (
@@ -519,12 +696,32 @@ export default function ProductionOrdersPage() {
                 data?.items?.map((order) => (
                   <tr key={order.production_order_id || order.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4">
-                      <div className="text-sm font-medium text-gray-900">
-                        {order.order_number}
+                      <div className="flex items-center space-x-2">
+                        <div className="text-sm font-medium text-gray-900">
+                          {order.order_number}
+                        </div>
+                        {/* Priority indicator */}
+                        {order.priority && (
+                          <span className={`inline-flex items-center px-1.5 py-0.5 text-xs font-medium rounded ${
+                            parseInt(order.priority.toString()) <= 3
+                              ? 'bg-red-100 text-red-800' // High priority
+                              : parseInt(order.priority.toString()) <= 6
+                              ? 'bg-yellow-100 text-yellow-800' // Medium priority
+                              : 'bg-green-100 text-green-800' // Low priority
+                          }`}>
+                            P{order.priority}
+                          </span>
+                        )}
                       </div>
                       {order.priority && (
-                        <div className="text-sm text-gray-500">
-                          Priority: {order.priority}
+                        <div className="text-xs text-gray-500 mt-1">
+                          Priority: {order.priority} {
+                            parseInt(order.priority.toString()) <= 3 
+                              ? '(High)' 
+                              : parseInt(order.priority.toString()) <= 6
+                              ? '(Medium)'
+                              : '(Low)'
+                          }
                         </div>
                       )}
                     </td>
@@ -542,15 +739,53 @@ export default function ProductionOrdersPage() {
                       <div className="text-sm text-gray-900">
                         {order.quantity_produced || 0} / {order.quantity_to_produce}
                       </div>
-                      <div className="text-sm text-gray-500">
+                      <div className="text-sm text-gray-500 mb-1">
                         {order.product?.unit_of_measure}
+                      </div>
+                      {/* Progress bar for quantity */}
+                      <div className="w-full bg-gray-200 rounded-full h-1.5">
+                        <div 
+                          className={`h-1.5 rounded-full transition-all ${
+                            order.status === 'COMPLETED' ? 'bg-green-600' : 'bg-blue-600'
+                          }`}
+                          style={{ 
+                            width: `${Math.min(100, ((order.quantity_produced || 0) / order.quantity_to_produce) * 100)}%` 
+                          }}
+                        />
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.status)}`}>
-                        {getStatusIcon(order.status)}
-                        <span className="ml-1">{order.status.replace('_', ' ')}</span>
-                      </span>
+                      <div className="flex flex-col space-y-1">
+                        <span className={`inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.status)}`}>
+                          {getStatusIcon(order.status)}
+                          <span className="ml-1">{order.status.replace('_', ' ')}</span>
+                        </span>
+                        
+                        {/* Status timeline indicator */}
+                        <div className="flex items-center space-x-1">
+                          <div className={`w-2 h-2 rounded-full ${
+                            ['PLANNED', 'IN_PROGRESS', 'COMPLETED'].includes(order.status) 
+                              ? 'bg-green-500' 
+                              : order.status === 'CANCELLED'
+                              ? 'bg-red-500'
+                              : 'bg-gray-300'
+                          }`} title="Planned" />
+                          <div className={`w-2 h-2 rounded-full ${
+                            ['IN_PROGRESS', 'COMPLETED'].includes(order.status)
+                              ? 'bg-green-500'
+                              : order.status === 'CANCELLED'
+                              ? 'bg-red-500' 
+                              : 'bg-gray-300'
+                          }`} title="In Progress" />
+                          <div className={`w-2 h-2 rounded-full ${
+                            order.status === 'COMPLETED'
+                              ? 'bg-green-500'
+                              : order.status === 'CANCELLED'
+                              ? 'bg-red-500'
+                              : 'bg-gray-300'
+                          }`} title="Completed" />
+                        </div>
+                      </div>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-900">
                       {order.planned_start_date && (
@@ -574,14 +809,23 @@ export default function ProductionOrdersPage() {
                         </button>
                         
                         {/* Quick Status Updates */}
-                        {order.status === 'PENDING' && (
-                          <button
-                            onClick={() => handleStatusUpdate(order, 'IN_PROGRESS')}
-                            className="text-blue-600 hover:text-blue-900"
-                            title="Start Production"
-                          >
-                            <PlayIcon className="h-4 w-4" />
-                          </button>
+                        {order.status === 'PLANNED' && (
+                          <>
+                            <button
+                              onClick={() => handleStatusUpdate(order, 'IN_PROGRESS')}
+                              className="text-blue-600 hover:text-blue-900"
+                              title="Start Production"
+                            >
+                              <PlayIcon className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => handleStatusUpdate(order, 'COMPLETED')}
+                              className="text-green-600 hover:text-green-900"
+                              title="Mark as Completed"
+                            >
+                              <CheckCircleIcon className="h-4 w-4" />
+                            </button>
+                          </>
                         )}
                         
                         {order.status === 'IN_PROGRESS' && (
@@ -594,14 +838,17 @@ export default function ProductionOrdersPage() {
                           </button>
                         )}
                         
+                        {/* Edit button - disabled for completed orders */}
                         <button
                           onClick={() => handleEdit(order)}
-                          className="text-indigo-600 hover:text-indigo-900"
-                          title="Edit"
+                          disabled={order.status === 'COMPLETED'}
+                          className={`${order.status === 'COMPLETED' ? 'text-gray-400 cursor-not-allowed' : 'text-indigo-600 hover:text-indigo-900'}`}
+                          title={order.status === 'COMPLETED' ? 'Cannot edit completed orders' : 'Edit'}
                         >
                           <PencilIcon className="h-4 w-4" />
                         </button>
                         
+                        {/* Delete button - disabled for completed orders */}
                         {order.status !== 'COMPLETED' && (
                           <button
                             onClick={() => handleDelete(order)}
@@ -610,6 +857,12 @@ export default function ProductionOrdersPage() {
                           >
                             <TrashIcon className="h-4 w-4" />
                           </button>
+                        )}
+                        
+                        {order.status === 'COMPLETED' && (
+                          <span className="text-gray-400" title="Completed orders cannot be deleted">
+                            <TrashIcon className="h-4 w-4" />
+                          </span>
                         )}
                       </div>
                     </td>
@@ -847,14 +1100,14 @@ export default function ProductionOrdersPage() {
                               }`}>
                                 {stockAnalysis.can_produce 
                                   ? `Can produce ${stockAnalysis.quantity_to_produce} units`
-                                  : `Missing ${stockAnalysis.missing_materials.length} materials`}
+                                  : `Missing ${stockAnalysis.missing_materials?.length || 0} materials`}
                               </p>
                             </div>
                           </div>
                         </div>
 
                         {/* Missing Materials */}
-                        {stockAnalysis.missing_materials.length > 0 && (
+                        {stockAnalysis.missing_materials && Array.isArray(stockAnalysis.missing_materials) && stockAnalysis.missing_materials.length > 0 && (
                           <div>
                             <h6 className="font-medium text-gray-700 mb-2">Missing Materials</h6>
                             <div className="space-y-2">
@@ -882,7 +1135,7 @@ export default function ProductionOrdersPage() {
                         <div>
                           <h6 className="font-medium text-gray-700 mb-2">Material Requirements</h6>
                           <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {stockAnalysis.analysis_items.map((item, index) => (
+                            {stockAnalysis.analysis_items && Array.isArray(stockAnalysis.analysis_items) ? stockAnalysis.analysis_items.map((item, index) => (
                               <div key={index} className={`flex justify-between items-center p-2 rounded border ${
                                 item.sufficient_stock 
                                   ? 'bg-green-50 border-green-200' 
@@ -915,7 +1168,9 @@ export default function ProductionOrdersPage() {
                                   )}
                                 </div>
                               </div>
-                            ))}
+                            )) : (
+                              <div className="text-sm text-gray-500">No material requirements data available</div>
+                            )}
                           </div>
                         </div>
 
@@ -923,12 +1178,12 @@ export default function ProductionOrdersPage() {
                         <div className="border-t pt-2">
                           <div className="flex justify-between text-sm">
                             <span className="font-medium text-gray-700">Estimated Material Cost:</span>
-                            <span className="font-medium text-gray-900">${stockAnalysis.total_material_cost.toFixed(2)}</span>
+                            <span className="font-medium text-gray-900">${(stockAnalysis.total_material_cost || 0).toFixed(2)}</span>
                           </div>
                         </div>
 
                         {/* Advanced Options */}
-                        {stockAnalysis.missing_materials.length > 0 && (
+                        {stockAnalysis.missing_materials && Array.isArray(stockAnalysis.missing_materials) && stockAnalysis.missing_materials.length > 0 && (
                           <div className="border-t pt-4">
                             <div className="flex items-center justify-between">
                               <h6 className="font-medium text-gray-700">Advanced Options</h6>
@@ -1206,7 +1461,7 @@ export default function ProductionOrdersPage() {
                   )}
 
                   {/* Component Details */}
-                  {showComponents && orderComponents && (
+                  {showComponents && orderComponents && Array.isArray(orderComponents) && (
                     <div className="space-y-3">
                       <h5 className="text-sm font-medium text-gray-700">Components ({orderComponents.length})</h5>
                       <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -1289,7 +1544,7 @@ export default function ProductionOrdersPage() {
                   )}
 
                   {/* Stock Reservations */}
-                  {showReservations && stockReservations && (
+                  {showReservations && stockReservations && Array.isArray(stockReservations) && (
                     <div className="space-y-3 mt-6">
                       <h5 className="text-sm font-medium text-gray-700">Stock Reservations ({stockReservations.length})</h5>
                       {stockReservations.length === 0 ? (
