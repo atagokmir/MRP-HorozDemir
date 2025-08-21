@@ -6,9 +6,16 @@ export function useWarehouses(filters?: WarehouseFilters) {
   return useQuery({
     queryKey: ['warehouses', filters],
     queryFn: async () => {
+      // Map frontend 'type' parameter to backend 'warehouse_type'
+      const backendParams = filters ? {
+        ...filters,
+        warehouse_type: filters.type,
+        type: undefined // Remove the type field
+      } : undefined;
+      
       const response = await apiClient.get<PaginatedResponse<Warehouse>>(
         '/master-data/warehouses',
-        filters
+        backendParams
       );
       return response.data;
     },
