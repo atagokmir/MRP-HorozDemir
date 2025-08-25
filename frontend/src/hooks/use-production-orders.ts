@@ -3,6 +3,7 @@ import { apiClient } from '@/lib/api-client';
 import { 
   ProductionOrder, 
   CreateProductionOrderRequest,
+  CreateMultipleProductionOrderRequest,
   CreateProductionOrderWithAnalysisRequest,
   CreateProductionOrderWithAnalysisResponse,
   UpdateProductionOrderRequest, 
@@ -49,6 +50,28 @@ export function useCreateProductionOrder() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      // Invalidate inventory queries since creating production orders reserves stock
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
+      queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
+    },
+  });
+}
+
+export function useCreateMultipleProductionOrders() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (data: CreateMultipleProductionOrderRequest) => {
+      const response = await apiClient.post<{ production_orders: ProductionOrder[]; warnings?: string[]; suggestions?: string[] }>('/production-orders/multiple', data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      // Invalidate inventory queries since creating multiple production orders reserves stock
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
+      queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
     },
   });
 }
@@ -64,6 +87,10 @@ export function useUpdateProductionOrder() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['production-orders'] });
       queryClient.invalidateQueries({ queryKey: ['production-orders', data?.production_order_id || data?.id] });
+      // Invalidate inventory queries since updating production orders may change stock reservations
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
+      queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
     },
   });
 }
@@ -78,6 +105,10 @@ export function useDeleteProductionOrder() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      // Invalidate inventory queries since deleting production orders releases reserved stock
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
+      queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
     },
   });
 }
@@ -112,6 +143,10 @@ export function useCreateProductionOrderWithAnalysis() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      // Invalidate inventory queries since creating production orders with analysis reserves stock
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
+      queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
     },
   });
 }
@@ -168,6 +203,10 @@ export function useUpdateComponentStatus() {
       queryClient.invalidateQueries({ 
         queryKey: ['production-orders', variables.productionOrderId, 'enhanced'] 
       });
+      // Invalidate inventory queries since updating component status may consume stock
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
+      queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
     },
   });
 }

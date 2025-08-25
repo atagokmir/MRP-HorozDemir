@@ -482,6 +482,12 @@ export interface ProductionOrder {
   };
 }
 
+export interface ProductionOrderItem {
+  product_id: number;
+  bom_id: number;
+  planned_quantity: number;
+}
+
 export interface CreateProductionOrderRequest {
   product_id: number;
   bom_id: number;
@@ -491,6 +497,17 @@ export interface CreateProductionOrderRequest {
   planned_start_date?: string;
   planned_completion_date?: string;
   notes?: string;
+}
+
+// Multiple products in single production order
+export interface CreateMultipleProductionOrderRequest {
+  warehouse_id: number;
+  products: ProductionOrderItem[];
+  priority?: number;
+  planned_start_date?: string;
+  planned_completion_date?: string;
+  notes?: string;
+  auto_create_missing?: boolean;
 }
 
 // Enhanced production order creation with analysis
@@ -564,6 +581,22 @@ export interface ProductionOrderStockAnalysis {
   missing_materials: StockAnalysisItem[];
   total_material_cost: number;
   analysis_date: string;
+  // Enhanced validation fields from backend
+  shortage_type?: 'RAW_MATERIALS' | 'SEMI_FINISHED' | 'MIXED';
+  can_create?: boolean;
+  must_add_stock?: boolean;
+  production_guidance?: {
+    can_create_order: boolean;
+    can_create_with_dependencies: boolean;
+    must_add_stock: boolean;
+    shortage_summary: {
+      raw_materials: number;
+      semi_finished: number;
+      total_shortages: number;
+    };
+    recommendations: string[];
+  };
+  auto_create_available?: boolean;
 }
 
 // Component-level progress tracking

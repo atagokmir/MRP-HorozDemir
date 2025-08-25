@@ -72,6 +72,9 @@ class ProductionOrderCreate(ProductionOrderBase):
 
 class ProductionOrderUpdate(BaseModel):
     """Schema for updating production order."""
+    product_id: Optional[int] = Field(None, description="ID of the product to produce")
+    bom_id: Optional[int] = Field(None, description="ID of the BOM to use")
+    warehouse_id: Optional[int] = Field(None, description="ID of the target warehouse")
     planned_start_date: Optional[date] = Field(None, description="Planned start date")
     planned_completion_date: Optional[date] = Field(None, description="Planned completion date")
     planned_quantity: Optional[Decimal] = Field(None, gt=0, description="Planned production quantity")

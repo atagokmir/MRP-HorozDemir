@@ -22,6 +22,8 @@ export function useInventoryItems(filters?: InventoryFilters) {
       );
       return response.data;
     },
+    refetchInterval: 60000, // Refetch every 60 seconds to keep data fresh
+    refetchIntervalInBackground: true, // Continue refetching when tab is not focused
   });
 }
 
@@ -37,6 +39,7 @@ export function useStockAvailability(productId: number, warehouseId?: number) {
       return response.data;
     },
     enabled: !!productId,
+    refetchInterval: 30000, // Refetch every 30 seconds for stock availability
   });
 }
 

@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useQueryClient } from '@tanstack/react-query';
 import { useInventoryItems, useCriticalStock } from '@/hooks/use-inventory';
 import { useProducts } from '@/hooks/use-products';
 import { useWarehouses } from '@/hooks/use-warehouses';
-import { InventoryItem, ProductCategory, WarehouseType, QualityStatus } from '@/types/api';
+import { ProductCategory, QualityStatus } from '@/types/api';
 import { formatCurrency, formatNumber, formatDate, getCategoryColor, getStatusColor, handleAPIError, debounce } from '@/lib/utils';
 import { 
   MagnifyingGlassIcon, 
@@ -14,21 +14,22 @@ import {
   CalendarDaysIcon,
   ArrowUpIcon,
   ArrowDownIcon,
-  FunnelIcon
+  FunnelIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import Link from 'next/link';
 
 export default function InventoryPage() {
-  const router = useRouter();
+  const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState('');
   const [productFilter, setProductFilter] = useState<number | ''>('');
   const [warehouseFilter, setWarehouseFilter] = useState<number | ''>('');
-  const [categoryFilter, setCategoryFilter] = useState<ProductCategory | ''>('');
   const [statusFilter, setStatusFilter] = useState<QualityStatus | ''>('');
   const [currentPage, setCurrentPage] = useState(1);
   const [showCriticalOnly, setShowCriticalOnly] = useState(false);
   const [sortBy, setSortBy] = useState<'name' | 'quantity' | 'value' | 'date'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Check URL params for critical filter
   useEffect(() => {
@@ -42,6 +43,26 @@ export default function InventoryPage() {
     setSearchTerm(value);
     setCurrentPage(1);
   }, 300);
+
+  // Manual refresh function
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+    await queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
+    await queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
+    setIsRefreshing(false);
+  };
+
+  // Auto-refresh when window regains focus
+  useEffect(() => {
+    const handleFocus = () => {
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
+    };
+    
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [queryClient]);
 
   const { data: inventoryData, isLoading: inventoryLoading, error } = useInventoryItems({
     page: currentPage,
@@ -74,7 +95,8 @@ export default function InventoryPage() {
 
   // Sort items
   const sortedItems = [...displayItems].sort((a, b) => {
-    let aValue: any, bValue: any;
+    let aValue: string | number | Date;
+    let bValue: string | number | Date;
     
     switch (sortBy) {
       case 'name':
@@ -138,6 +160,14 @@ export default function InventoryPage() {
           </p>
         </div>
         <div className="flex space-x-3">
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <ArrowPathIcon className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+          </button>
           <Link
             href="/dashboard/stock-operations"
             className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700"
@@ -145,6 +175,30 @@ export default function InventoryPage() {
             <CubeIcon className="h-4 w-4 mr-2" />
             Stock Operations
           </Link>
+        </div>
+      </div>
+
+      {/* Data Status */}
+      <div className="bg-blue-50 border-l-4 border-blue-400 p-4">
+        <div className="flex items-center">
+          <div className="text-sm text-blue-700">
+            {inventoryLoading ? (
+              <span className="flex items-center">
+                <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                Loading latest inventory data...
+              </span>
+            ) : (
+              <span className="flex items-center">
+                <div className="h-2 w-2 bg-green-500 rounded-full mr-2"></div>
+                Inventory data is up to date. Auto-refreshes every 60 seconds or when production orders change.
+                {inventoryData && (
+                  <span className="ml-2 text-blue-600">
+                    ({inventoryData.total} items total)
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

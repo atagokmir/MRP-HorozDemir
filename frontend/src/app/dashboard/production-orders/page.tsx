@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useProductionOrders, useCreateProductionOrder, useCreateProductionOrderWithAnalysis, useUpdateProductionOrder, useDeleteProductionOrder, useEnhancedProductionOrder, useProductionOrderComponents, useUpdateComponentStatus, useProductionOrderReservations, useAnalyzeStockAvailability } from '@/hooks/use-production-orders';
+import { useProductionOrders, useCreateProductionOrder, useCreateMultipleProductionOrders, useCreateProductionOrderWithAnalysis, useUpdateProductionOrder, useDeleteProductionOrder, useEnhancedProductionOrder, useProductionOrderComponents, useUpdateComponentStatus, useProductionOrderReservations, useAnalyzeStockAvailability } from '@/hooks/use-production-orders';
 import { useBOMs } from '@/hooks/use-bom';
 import { useProducts } from '@/hooks/use-products';
 import { useWarehouses } from '@/hooks/use-warehouses';
-import { ProductionOrder, CreateProductionOrderRequest, ProductionOrderStatus, ProductionOrderStockAnalysis, ComponentStatus, EnhancedProductionOrder, ProductionOrderComponent } from '@/types/api';
+import { ProductionOrder, CreateProductionOrderRequest, ProductionOrderItem, CreateMultipleProductionOrderRequest, ProductionOrderStatus, ProductionOrderStockAnalysis, ComponentStatus, EnhancedProductionOrder, ProductionOrderComponent } from '@/types/api';
 import { formatDate, handleAPIError, debounce } from '@/lib/utils';
 import { 
   PlusIcon, 
@@ -100,6 +100,8 @@ export default function ProductionOrdersPage() {
   const [showComponents, setShowComponents] = useState(false);
   const [showReservations, setShowReservations] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [isMultipleProducts, setIsMultipleProducts] = useState(false);
+  const [productItems, setProductItems] = useState<ProductionOrderItem[]>([{ product_id: 0, bom_id: 0, planned_quantity: 1 }]);
 
   const debouncedSearch = debounce((value: string) => {
     setSearchTerm(value);
@@ -123,6 +125,7 @@ export default function ProductionOrdersPage() {
   const warehouses = warehousesData?.items || [];
 
   const createOrder = useCreateProductionOrder();
+  const createMultipleOrders = useCreateMultipleProductionOrders();
   const createOrderWithAnalysis = useCreateProductionOrderWithAnalysis();
   const updateOrder = useUpdateProductionOrder();
   const deleteOrder = useDeleteProductionOrder();
@@ -156,12 +159,26 @@ export default function ProductionOrdersPage() {
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
 
-    if (!formData.product_id) errors.product_id = 'Product is required';
-    if (!formData.bom_id) errors.bom_id = 'BOM is required';
-    if (!formData.warehouse_id) errors.warehouse_id = 'Warehouse is required';
-    if (!formData.planned_quantity || formData.planned_quantity <= 0) {
-      errors.planned_quantity = 'Quantity must be greater than 0';
+    if (isMultipleProducts) {
+      if (!formData.warehouse_id) errors.warehouse_id = 'Warehouse is required';
+      
+      // Validate each product item
+      productItems.forEach((item, index) => {
+        if (!item.product_id) errors[`product_${index}`] = `Product ${index + 1} is required`;
+        if (!item.bom_id) errors[`bom_${index}`] = `BOM ${index + 1} is required`;
+        if (!item.planned_quantity || item.planned_quantity <= 0) {
+          errors[`quantity_${index}`] = `Quantity ${index + 1} must be greater than 0`;
+        }
+      });
+    } else {
+      if (!formData.product_id) errors.product_id = 'Product is required';
+      if (!formData.bom_id) errors.bom_id = 'BOM is required';
+      if (!formData.warehouse_id) errors.warehouse_id = 'Warehouse is required';
+      if (!formData.planned_quantity || formData.planned_quantity <= 0) {
+        errors.planned_quantity = 'Quantity must be greater than 0';
+      }
     }
+    
     if (formData.priority && (formData.priority < 1 || formData.priority > 10)) {
       errors.priority = 'Priority must be between 1 and 10';
     }
@@ -180,26 +197,61 @@ export default function ProductionOrdersPage() {
     if (!validateForm()) return;
 
     try {
-      const submitData = {
-        ...formData,
-        planned_start_date: formData.planned_start_date || undefined,
-        planned_completion_date: formData.planned_completion_date || undefined,
-        priority: formData.priority || undefined,
-        notes: formData.notes || undefined,
-      };
-
       if (editingOrder) {
         const orderId = editingOrder.production_order_id || editingOrder.id;
         if (!orderId) {
           throw new Error('Invalid production order ID');
         }
         
+        const submitData = {
+          ...formData,
+          planned_start_date: formData.planned_start_date || undefined,
+          planned_completion_date: formData.planned_completion_date || undefined,
+          priority: formData.priority || undefined,
+          notes: formData.notes || undefined,
+        };
+        
         await updateOrder.mutateAsync({
           id: orderId,
           data: submitData,
         });
         alert('Production order updated successfully!');
+      } else if (isMultipleProducts) {
+        // Handle multiple products creation
+        const multipleData: CreateMultipleProductionOrderRequest = {
+          warehouse_id: formData.warehouse_id,
+          products: productItems,
+          priority: formData.priority || undefined,
+          planned_start_date: formData.planned_start_date || undefined,
+          planned_completion_date: formData.planned_completion_date || undefined,
+          notes: formData.notes || undefined,
+          auto_create_missing: autoCreateMissing,
+        };
+
+        const result = await createMultipleOrders.mutateAsync(multipleData);
+        
+        // Build success message
+        let successMessage = `${result.production_orders?.length || 0} production orders created successfully!`;
+        
+        if (Array.isArray(result.warnings) && result.warnings.length > 0) {
+          successMessage += '\n\nWarnings:\n' + result.warnings.join('\n');
+        }
+        
+        if (Array.isArray(result.suggestions) && result.suggestions.length > 0) {
+          successMessage += '\n\nSuggestions:\n' + result.suggestions.join('\n');
+        }
+        
+        alert(successMessage);
       } else {
+        // Single product creation
+        const submitData = {
+          ...formData,
+          planned_start_date: formData.planned_start_date || undefined,
+          planned_completion_date: formData.planned_completion_date || undefined,
+          priority: formData.priority || undefined,
+          notes: formData.notes || undefined,
+        };
+
         // Use advanced creation if analysis was done or auto-create is enabled
         if (stockAnalysis || autoCreateMissing) {
           const advancedData = {
@@ -234,10 +286,48 @@ export default function ProductionOrdersPage() {
         }
       }
       handleCloseModal();
-    } catch (error) {
-      const errorMessage = handleAPIError(error);
-      alert(`Failed to ${editingOrder ? 'update' : 'create'} production order:\n\n${errorMessage}`);
+    } catch (error: any) {
       console.error('Production order submission error:', error);
+      
+      // Enhanced error handling for backend validation responses
+      let errorMessage = handleAPIError(error);
+      
+      // Check if error has enhanced validation info
+      if (error?.response?.data?.data) {
+        const errorData = error.response.data.data;
+        
+        if (errorData.shortage_type || errorData.production_guidance) {
+          let enhancedMessage = errorMessage;
+          
+          if (errorData.shortage_type) {
+            const shortageTypeText = {
+              'RAW_MATERIALS': 'Raw materials shortage',
+              'SEMI_FINISHED': 'Semi-finished products shortage', 
+              'MIXED': 'Mixed materials shortage'
+            };
+            enhancedMessage += `\n\nShortage Type: ${shortageTypeText[errorData.shortage_type] || errorData.shortage_type}`;
+          }
+          
+          if (errorData.production_guidance && errorData.production_guidance.recommendations) {
+            enhancedMessage += `\n\nGuidance: ${errorData.production_guidance.recommendations.join('. ')}`;
+          }
+          
+          if (errorData.must_add_stock) {
+            enhancedMessage += '\n\n⚠️ Raw materials must be added to stock before creating this order.';
+          }
+          
+          if (errorData.missing_materials && Array.isArray(errorData.missing_materials)) {
+            enhancedMessage += `\n\nMissing Materials (${errorData.missing_materials.length}):`;
+            errorData.missing_materials.forEach((item: any) => {
+              enhancedMessage += `\n• ${item.product_name}: Need ${item.shortage_quantity || (item.required_quantity - item.available_quantity)} more`;
+            });
+          }
+          
+          errorMessage = enhancedMessage;
+        }
+      }
+      
+      alert(`Failed to ${editingOrder ? 'update' : 'create'} production order:\n\n${errorMessage}`);
     }
   };
 
@@ -390,6 +480,8 @@ export default function ProductionOrdersPage() {
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setEditingOrder(null);
+    setIsMultipleProducts(false);
+    setProductItems([{ product_id: 0, bom_id: 0, planned_quantity: 1 }]);
     setFormData({
       product_id: 0,
       bom_id: 0,
@@ -555,6 +647,31 @@ export default function ProductionOrdersPage() {
     }
   }, [formData.bom_id, formData.warehouse_id, formData.planned_quantity]);
 
+  // Multiple products management functions
+  const addProductItem = () => {
+    setProductItems([...productItems, { product_id: 0, bom_id: 0, planned_quantity: 1 }]);
+  };
+
+  const removeProductItem = (index: number) => {
+    if (productItems.length > 1) {
+      setProductItems(productItems.filter((_, i) => i !== index));
+    }
+  };
+
+  const updateProductItem = (index: number, field: keyof ProductionOrderItem, value: number) => {
+    const updated = [...productItems];
+    updated[index] = { ...updated[index], [field]: value };
+    setProductItems(updated);
+  };
+
+  const getFilteredBOMsForProduct = (productId: number) => {
+    if (!productId) return boms;
+    return boms.filter(bom => {
+      const bomProductId = bom.product?.product_id || bom.product_id;
+      return bomProductId === productId;
+    });
+  };
+
   if (error) {
     return (
       <div className="bg-red-50 border border-red-200 rounded-md p-4">
@@ -686,14 +803,14 @@ export default function ProductionOrdersPage() {
                     </div>
                   </td>
                 </tr>
-              ) : data?.items?.length === 0 ? (
+              ) : !data?.items || data.items.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-6 py-4 text-center text-gray-500">
                     No production orders found
                   </td>
                 </tr>
               ) : (
-                data?.items?.map((order) => (
+                Array.isArray(data.items) ? data.items.map((order) => (
                   <tr key={order.production_order_id || order.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4">
                       <div className="flex items-center space-x-2">
@@ -867,7 +984,7 @@ export default function ProductionOrdersPage() {
                       </div>
                     </td>
                   </tr>
-                ))
+                )) : null
               )}
             </tbody>
           </table>
@@ -907,33 +1024,181 @@ export default function ProductionOrdersPage() {
               <h3 className="text-lg font-medium text-gray-900 mb-4">
                 {editingOrder ? 'Edit Production Order' : 'Create New Production Order'}
               </h3>
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Product</label>
-                  <select
-                    value={formData.product_id || 0}
-                    onChange={(e) => handleProductChange(parseInt(e.target.value) || 0)}
-                    disabled={!productsData || products.length === 0}
-                    className={`mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
-                      !productsData || products.length === 0 ? 'bg-gray-100 cursor-not-allowed' : ''
-                    }`}
-                  >
-                    <option value={0}>
-                      {!productsData ? 'Loading products...' : products.length === 0 ? 'No products available' : 'Select Product'}
-                    </option>
-                    {products.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name} ({product.code})
-                      </option>
-                    ))}
-                  </select>
-                  {formErrors.product_id && <p className="text-red-500 text-xs mt-1">{formErrors.product_id}</p>}
-                  {!!formData.product_id && (
-                    <p className="text-blue-600 text-xs mt-1">
-                      {getFilteredBOMs().length} BOM{getFilteredBOMs().length !== 1 ? 's' : ''} available for this product
-                    </p>
-                  )}
+              
+              {/* Multiple Products Toggle */}
+              {!editingOrder && (
+                <div className="bg-blue-50 p-3 rounded-md mb-4">
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="multiple-products"
+                      checked={isMultipleProducts}
+                      onChange={(e) => {
+                        setIsMultipleProducts(e.target.checked);
+                        setStockAnalysis(null);
+                        setShowStockAnalysis(false);
+                        setFormErrors({});
+                      }}
+                      className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                    <label htmlFor="multiple-products" className="ml-2 text-sm text-blue-900">
+                      <span className="font-medium">Create multiple products in single order</span>
+                      <p className="text-xs text-blue-700 mt-1">
+                        Enable this to add multiple products with different quantities to a single production order
+                      </p>
+                    </label>
+                  </div>
                 </div>
+              )}
+              
+              <form onSubmit={handleSubmit} className="space-y-6">
+                {isMultipleProducts ? (
+                  /* Multiple Products Section */
+                  <div>
+                    <div className="flex justify-between items-center mb-4">
+                      <h4 className="text-md font-medium text-gray-700">Products ({productItems.length})</h4>
+                      <button
+                        type="button"
+                        onClick={addProductItem}
+                        className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-indigo-700 bg-indigo-100 hover:bg-indigo-200"
+                      >
+                        <PlusIcon className="h-4 w-4 mr-1" />
+                        Add Product
+                      </button>
+                    </div>
+                    
+                    <div className="space-y-4 max-h-60 overflow-y-auto">
+                      {productItems.map((item, index) => (
+                        <div key={index} className="border border-gray-200 rounded-lg p-4">
+                          <div className="flex justify-between items-start mb-3">
+                            <h5 className="text-sm font-medium text-gray-900">Product {index + 1}</h5>
+                            {productItems.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeProductItem(index)}
+                                className="text-red-600 hover:text-red-800"
+                                title="Remove Product"
+                              >
+                                <TrashIcon className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            {/* Product Selection */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700">Product</label>
+                              <select
+                                value={item.product_id || 0}
+                                onChange={(e) => {
+                                  const productId = parseInt(e.target.value) || 0;
+                                  updateProductItem(index, 'product_id', productId);
+                                  // Auto-clear BOM if it doesn't match the new product
+                                  const currentBOM = boms.find(bom => (bom.bom_id ?? bom.id) === item.bom_id);
+                                  const isCurrentBOMValid = currentBOM && (currentBOM.product?.product_id || currentBOM.product_id) === productId;
+                                  if (!isCurrentBOMValid) {
+                                    updateProductItem(index, 'bom_id', 0);
+                                  }
+                                }}
+                                className="mt-1 block w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                              >
+                                <option value={0}>Select Product</option>
+                                {products && Array.isArray(products) ? products.map((product) => {
+                                  const productId = product.id || product.product_id;
+                                  const productName = product.name || product.product_name;
+                                  if (!productId) return null;
+                                  return (
+                                    <option key={productId} value={productId}>
+                                      {productName}
+                                    </option>
+                                  );
+                                }).filter(Boolean) : null}
+                              </select>
+                              {formErrors[`product_${index}`] && (
+                                <p className="text-red-500 text-xs mt-1">{formErrors[`product_${index}`]}</p>
+                              )}
+                            </div>
+                            
+                            {/* BOM Selection */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700">BOM</label>
+                              <select
+                                value={item.bom_id || 0}
+                                onChange={(e) => updateProductItem(index, 'bom_id', parseInt(e.target.value) || 0)}
+                                className="mt-1 block w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                              >
+                                <option value={0}>Select BOM</option>
+                                {getFilteredBOMsForProduct(item.product_id).map((bom) => {
+                                  const bomId = bom.bom_id ?? bom.id;
+                                  const bomName = bom.bom_name ?? bom.name ?? 'Unknown BOM';
+                                  if (!bomId) return null;
+                                  return (
+                                    <option key={bomId} value={bomId}>
+                                      {bomName} (v{bom.version})
+                                    </option>
+                                  );
+                                }).filter(Boolean)}
+                              </select>
+                              {formErrors[`bom_${index}`] && (
+                                <p className="text-red-500 text-xs mt-1">{formErrors[`bom_${index}`]}</p>
+                              )}
+                            </div>
+                            
+                            {/* Quantity */}
+                            <div>
+                              <label className="block text-xs font-medium text-gray-700">Quantity</label>
+                              <input
+                                type="number"
+                                min="1"
+                                step="0.01"
+                                value={item.planned_quantity || 1}
+                                onChange={(e) => updateProductItem(index, 'planned_quantity', parseFloat(e.target.value) || 1)}
+                                className="mt-1 block w-full px-2 py-1 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                              />
+                              {formErrors[`quantity_${index}`] && (
+                                <p className="text-red-500 text-xs mt-1">{formErrors[`quantity_${index}`]}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  /* Single Product Section */
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Product</label>
+                    <select
+                      value={formData.product_id || 0}
+                      onChange={(e) => handleProductChange(parseInt(e.target.value) || 0)}
+                      disabled={!productsData || products.length === 0}
+                      className={`mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 ${
+                        !productsData || products.length === 0 ? 'bg-gray-100 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      <option value={0}>
+                        {!productsData ? 'Loading products...' : products.length === 0 ? 'No products available' : 'Select Product'}
+                      </option>
+                      {products && Array.isArray(products) ? products.map((product) => {
+                        const productId = product.id || product.product_id;
+                        const productName = product.name || product.product_name;
+                        const productCode = product.code || product.product_code;
+                        if (!productId) return null;
+                        return (
+                          <option key={productId} value={productId}>
+                            {productName} ({productCode})
+                          </option>
+                        );
+                      }).filter(Boolean) : null}
+                    </select>
+                    {formErrors.product_id && <p className="text-red-500 text-xs mt-1">{formErrors.product_id}</p>}
+                    {!!formData.product_id && (
+                      <p className="text-blue-600 text-xs mt-1">
+                        {getFilteredBOMs().length} BOM{getFilteredBOMs().length !== 1 ? 's' : ''} available for this product
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Warehouse</label>
@@ -948,71 +1213,80 @@ export default function ProductionOrdersPage() {
                     <option value={0}>
                       {!warehousesData ? 'Loading warehouses...' : warehouses.length === 0 ? 'No warehouses available' : 'Select Warehouse'}
                     </option>
-                    {warehouses.map((warehouse) => (
-                      <option key={warehouse.id} value={warehouse.id}>
-                        {warehouse.name} ({warehouse.type?.replace('_', ' ')})
-                      </option>
-                    ))}
+                    {warehouses && Array.isArray(warehouses) ? warehouses.map((warehouse) => {
+                      const warehouseId = warehouse.id || warehouse.warehouse_id;
+                      const warehouseName = warehouse.name || warehouse.warehouse_name;
+                      const warehouseType = warehouse.type || warehouse.warehouse_type;
+                      if (!warehouseId) return null;
+                      return (
+                        <option key={warehouseId} value={warehouseId}>
+                          {warehouseName} ({warehouseType?.replace('_', ' ')})
+                        </option>
+                      );
+                    }).filter(Boolean) : null}
                   </select>
                   {formErrors.warehouse_id && <p className="text-red-500 text-xs mt-1">{formErrors.warehouse_id}</p>}
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">BOM</label>
-                  <div className="flex space-x-2">
-                    <select
-                      value={formData.bom_id || 0}
-                      onChange={(e) => handleBOMChange(parseInt(e.target.value) || 0)}
-                      className="flex-1 mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                      disabled={isLoadingBOMs}
-                    >
-                      <option value={0}>
-                        {isLoadingBOMs ? 'Loading BOMs...' : bomsError ? 'Error loading BOMs' : 'Select BOM'}
-                      </option>
-                      {getFilteredBOMs().map((bom) => {
-                        const bomId = bom.bom_id ?? bom.id;
-                        const bomName = bom.bom_name ?? bom.name ?? 'Unknown BOM';
-                        return (
-                          <option key={bomId} value={bomId}>
-                            {bomName} - {bom.product?.product_name ?? 'Unknown Product'} (v{bom.version})
-                          </option>
-                        );
-                      })}
-                    </select>
-                    {formData.bom_id && (
-                      <button
-                        type="button"
-                        onClick={() => setFormData({ ...formData, bom_id: 0, product_id: 0 })}
-                        className="mt-1 px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-                        title="Clear BOM selection"
+                {!isMultipleProducts && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">BOM</label>
+                    <div className="flex space-x-2">
+                      <select
+                        value={formData.bom_id || 0}
+                        onChange={(e) => handleBOMChange(parseInt(e.target.value) || 0)}
+                        className="flex-1 mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        disabled={isLoadingBOMs}
                       >
-                        Clear
-                      </button>
+                        <option value={0}>
+                          {isLoadingBOMs ? 'Loading BOMs...' : bomsError ? 'Error loading BOMs' : 'Select BOM'}
+                        </option>
+                        {getFilteredBOMs().map((bom) => {
+                          const bomId = bom.bom_id ?? bom.id;
+                          const bomName = bom.bom_name ?? bom.name ?? 'Unknown BOM';
+                          if (!bomId) return null;
+                          return (
+                            <option key={bomId} value={bomId}>
+                              {bomName} - {bom.product?.product_name ?? 'Unknown Product'} (v{bom.version})
+                            </option>
+                          );
+                        }).filter(Boolean)}
+                      </select>
+                      {formData.bom_id && (
+                        <button
+                          type="button"
+                          onClick={() => setFormData({ ...formData, bom_id: 0, product_id: 0 })}
+                          className="mt-1 px-3 py-2 text-sm border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                          title="Clear BOM selection"
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    {formErrors.bom_id && <p className="text-red-500 text-xs mt-1">{formErrors.bom_id}</p>}
+                    
+                    {/* Debug info */}
+                    <p className="text-xs text-gray-500 mt-1">
+                      {getFilteredBOMs().length} BOMs available {formData.product_id ? 'for selected product' : 'total'}
+                      {bomsError && ` (Error: ${bomsError})`}
+                    </p>
+                    
+                    {/* BOM Info */}
+                    {getSelectedBOM() && (
+                      <div className="mt-2 p-3 bg-blue-50 rounded-md">
+                        <p className="text-sm text-blue-900">
+                          <strong>Product:</strong> {getSelectedBOM()?.product?.product_name} ({getSelectedBOM()?.product?.product_code})
+                        </p>
+                        <p className="text-sm text-blue-900">
+                          <strong>BOM Code:</strong> {getSelectedBOM()?.bom_code || getSelectedBOM()?.code}
+                        </p>
+                        <p className="text-sm text-blue-900">
+                          <strong>Items:</strong> {getSelectedBOM()?.bom_items?.length || 0} components
+                        </p>
+                      </div>
                     )}
                   </div>
-                  {formErrors.bom_id && <p className="text-red-500 text-xs mt-1">{formErrors.bom_id}</p>}
-                  
-                  {/* Debug info */}
-                  <p className="text-xs text-gray-500 mt-1">
-                    {getFilteredBOMs().length} BOMs available {formData.product_id ? 'for selected product' : 'total'}
-                    {bomsError && ` (Error: ${bomsError})`}
-                  </p>
-                  
-                  {/* BOM Info */}
-                  {getSelectedBOM() && (
-                    <div className="mt-2 p-3 bg-blue-50 rounded-md">
-                      <p className="text-sm text-blue-900">
-                        <strong>Product:</strong> {getSelectedBOM()?.product?.product_name} ({getSelectedBOM()?.product?.product_code})
-                      </p>
-                      <p className="text-sm text-blue-900">
-                        <strong>BOM Code:</strong> {getSelectedBOM()?.bom_code || getSelectedBOM()?.code}
-                      </p>
-                      <p className="text-sm text-blue-900">
-                        <strong>Items:</strong> {getSelectedBOM()?.bom_items?.length || 0} components
-                      </p>
-                    </div>
-                  )}
-                </div>
+                )}
 
                 {/* Stock Analysis Section */}
                 {!editingOrder && (
@@ -1093,15 +1367,51 @@ export default function ProductionOrdersPage() {
                               <h5 className={`font-medium ${
                                 stockAnalysis.can_produce ? 'text-green-800' : 'text-red-800'
                               }`}>
-                                {stockAnalysis.can_produce ? 'Stock Available' : 'Insufficient Stock'}
+                                {stockAnalysis.can_create !== false 
+                                  ? (stockAnalysis.can_produce ? 'Stock Available' : 'Partial Stock Available')
+                                  : 'Cannot Create Order'}
                               </h5>
                               <p className={`text-sm ${
                                 stockAnalysis.can_produce ? 'text-green-700' : 'text-red-700'
                               }`}>
                                 {stockAnalysis.can_produce 
                                   ? `Can produce ${stockAnalysis.quantity_to_produce} units`
-                                  : `Missing ${stockAnalysis.missing_materials?.length || 0} materials`}
+                                  : stockAnalysis.shortage_type 
+                                    ? `${stockAnalysis.shortage_type === 'RAW_MATERIALS' ? 'Raw materials' : stockAnalysis.shortage_type === 'SEMI_FINISHED' ? 'Semi-finished products' : 'Mixed materials'} shortage detected`
+                                    : `Missing ${stockAnalysis.missing_materials?.length || 0} materials`}
                               </p>
+                              
+                              {/* Enhanced Production Guidance */}
+                              {stockAnalysis.production_guidance && stockAnalysis.production_guidance.recommendations?.length > 0 && (
+                                <div className="mt-2">
+                                  <div className={`text-sm font-medium ${
+                                    stockAnalysis.can_produce ? 'text-green-700' : 'text-red-700'
+                                  }`}>
+                                    Production Guidance:
+                                  </div>
+                                  <ul className={`text-sm mt-1 list-disc list-inside ${
+                                    stockAnalysis.can_produce ? 'text-green-600' : 'text-red-600'
+                                  }`}>
+                                    {stockAnalysis.production_guidance.recommendations.map((recommendation, index) => (
+                                      <li key={index}>{recommendation}</li>
+                                    ))}
+                                  </ul>
+                                  {stockAnalysis.production_guidance.shortage_summary && (
+                                    <div className="text-xs text-gray-500 mt-1">
+                                      Shortages: {stockAnalysis.production_guidance.shortage_summary.raw_materials} raw materials, {stockAnalysis.production_guidance.shortage_summary.semi_finished} semi-finished products
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              
+                              {/* Must Add Stock Warning */}
+                              {stockAnalysis.must_add_stock && (
+                                <div className="mt-2 p-2 bg-yellow-100 border border-yellow-300 rounded">
+                                  <p className="text-sm text-yellow-800 font-medium">
+                                    ⚠️ Stock must be added before creating this production order
+                                  </p>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -1135,40 +1445,42 @@ export default function ProductionOrdersPage() {
                         <div>
                           <h6 className="font-medium text-gray-700 mb-2">Material Requirements</h6>
                           <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {stockAnalysis.analysis_items && Array.isArray(stockAnalysis.analysis_items) ? stockAnalysis.analysis_items.map((item, index) => (
-                              <div key={index} className={`flex justify-between items-center p-2 rounded border ${
-                                item.sufficient_stock 
-                                  ? 'bg-green-50 border-green-200' 
-                                  : 'bg-yellow-50 border-yellow-200'
-                              }`}>
-                                <div>
-                                  <span className={`font-medium ${
-                                    item.sufficient_stock ? 'text-green-800' : 'text-yellow-800'
-                                  }`}>
-                                    {item.product_name}
-                                  </span>
-                                  <span className={`text-sm ml-2 ${
-                                    item.sufficient_stock ? 'text-green-600' : 'text-yellow-600'
-                                  }`}>
-                                    ({item.product_code})
-                                  </span>
-                                </div>
-                                <div className="text-right">
-                                  <div className={`text-sm ${
-                                    item.sufficient_stock ? 'text-green-700' : 'text-yellow-700'
-                                  }`}>
-                                    Need: {item.required_quantity} | Available: {item.available_quantity}
-                                  </div>
-                                  {item.unit_cost && (
-                                    <div className={`text-xs ${
+                            {stockAnalysis.analysis_items && Array.isArray(stockAnalysis.analysis_items) && stockAnalysis.analysis_items.length > 0 ? (
+                              stockAnalysis.analysis_items.map((item, index) => (
+                                <div key={index} className={`flex justify-between items-center p-2 rounded border ${
+                                  item.sufficient_stock 
+                                    ? 'bg-green-50 border-green-200' 
+                                    : 'bg-yellow-50 border-yellow-200'
+                                }`}>
+                                  <div>
+                                    <span className={`font-medium ${
+                                      item.sufficient_stock ? 'text-green-800' : 'text-yellow-800'
+                                    }`}>
+                                      {item.product_name}
+                                    </span>
+                                    <span className={`text-sm ml-2 ${
                                       item.sufficient_stock ? 'text-green-600' : 'text-yellow-600'
                                     }`}>
-                                      Cost: ${(item.total_cost || 0).toFixed(2)}
+                                      ({item.product_code})
+                                    </span>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className={`text-sm ${
+                                      item.sufficient_stock ? 'text-green-700' : 'text-yellow-700'
+                                    }`}>
+                                      Need: {item.required_quantity} | Available: {item.available_quantity}
                                     </div>
-                                  )}
+                                    {item.unit_cost && (
+                                      <div className={`text-xs ${
+                                        item.sufficient_stock ? 'text-green-600' : 'text-yellow-600'
+                                      }`}>
+                                        Cost: ${(item.total_cost || 0).toFixed(2)}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            )) : (
+                              ))
+                            ) : (
                               <div className="text-sm text-gray-500">No material requirements data available</div>
                             )}
                           </div>
@@ -1198,23 +1510,100 @@ export default function ProductionOrdersPage() {
                             
                             {showAdvancedOptions && (
                               <div className="mt-3 space-y-3">
-                                <div className="flex items-start">
-                                  <input
-                                    type="checkbox"
-                                    id="auto-create-missing"
-                                    checked={autoCreateMissing}
-                                    onChange={(e) => setAutoCreateMissing(e.target.checked)}
-                                    className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                                  />
-                                  <label htmlFor="auto-create-missing" className="ml-2 text-sm text-gray-700">
-                                    <span className="font-medium">Auto-create production orders for missing semi-finished products</span>
-                                    <p className="text-xs text-gray-500 mt-1">
-                                      This will automatically create nested production orders for any missing semi-finished products that have BOMs.
-                                    </p>
-                                  </label>
-                                </div>
+                                {/* Auto-create missing option - only show if backend supports it */}
+                                {(stockAnalysis.auto_create_available !== false && stockAnalysis.shortage_type !== 'RAW_MATERIALS') && (
+                                  <div className="flex items-start">
+                                    <input
+                                      type="checkbox"
+                                      id="auto-create-missing"
+                                      checked={autoCreateMissing}
+                                      onChange={(e) => setAutoCreateMissing(e.target.checked)}
+                                      disabled={stockAnalysis.must_add_stock}
+                                      className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded disabled:opacity-50"
+                                    />
+                                    <label htmlFor="auto-create-missing" className="ml-2 text-sm text-gray-700">
+                                      <span className="font-medium">Auto-create production orders for missing semi-finished products</span>
+                                      <p className="text-xs text-gray-500 mt-1">
+                                        This will automatically create nested production orders for any missing semi-finished products that have BOMs.
+                                      </p>
+                                      {stockAnalysis.must_add_stock && (
+                                        <p className="text-xs text-red-600 mt-1">
+                                          Disabled: Raw materials must be added to stock first.
+                                        </p>
+                                      )}
+                                    </label>
+                                  </div>
+                                )}
 
-                                {autoCreateMissing && (
+                                {/* Show guidance for different shortage scenarios */}
+                                {stockAnalysis.shortage_type === 'RAW_MATERIALS' && (
+                                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-md">
+                                    <h6 className="text-sm font-medium text-amber-800">Raw Materials Required</h6>
+                                    <p className="text-xs text-amber-700 mt-1">
+                                      Raw materials cannot be auto-created. Please add the missing raw materials to stock or contact purchasing.
+                                    </p>
+                                    <div className="mt-2 flex space-x-2">
+                                      <button 
+                                        type="button"
+                                        onClick={() => window.open('/dashboard/stock-operations', '_blank')}
+                                        className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded hover:bg-amber-200"
+                                      >
+                                        Add Stock
+                                      </button>
+                                      <button 
+                                        type="button"
+                                        onClick={() => window.open('/dashboard/suppliers', '_blank')}
+                                        className="text-xs bg-amber-100 text-amber-800 px-2 py-1 rounded hover:bg-amber-200"
+                                      >
+                                        Contact Suppliers
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {stockAnalysis.shortage_type === 'SEMI_FINISHED' && (
+                                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+                                    <h6 className="text-sm font-medium text-blue-800">Semi-Finished Products Missing</h6>
+                                    <p className="text-xs text-blue-700 mt-1">
+                                      You can either create production orders for missing semi-finished products or add them directly to stock.
+                                    </p>
+                                    <div className="mt-2 flex space-x-2">
+                                      <button 
+                                        type="button"
+                                        onClick={() => setAutoCreateMissing(true)}
+                                        className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded hover:bg-blue-200"
+                                      >
+                                        Auto-Create Orders
+                                      </button>
+                                      <button 
+                                        type="button"
+                                        onClick={() => window.open('/dashboard/stock-operations', '_blank')}
+                                        className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded hover:bg-blue-200"
+                                      >
+                                        Add to Stock
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                                
+                                {stockAnalysis.shortage_type === 'MIXED' && (
+                                  <div className="p-3 bg-purple-50 border border-purple-200 rounded-md">
+                                    <h6 className="text-sm font-medium text-purple-800">Mixed Materials Shortage</h6>
+                                    <p className="text-xs text-purple-700 mt-1">
+                                      Both raw materials and semi-finished products are missing. Address raw materials first, then handle semi-finished products.
+                                    </p>
+                                    <div className="mt-2 text-xs text-purple-600">
+                                      <strong>Recommended steps:</strong>
+                                      <ol className="list-decimal list-inside mt-1 space-y-1">
+                                        <li>Add missing raw materials to stock</li>
+                                        <li>Enable auto-create for semi-finished products</li>
+                                        <li>Create the production order</li>
+                                      </ol>
+                                    </div>
+                                  </div>
+                                )}
+
+                                {autoCreateMissing && !stockAnalysis.must_add_stock && (
                                   <div className="ml-6 p-3 bg-blue-50 rounded-md">
                                     <p className="text-xs text-blue-700">
                                       <strong>Note:</strong> This will create a production tree where dependent orders are created first, 
@@ -1231,19 +1620,21 @@ export default function ProductionOrdersPage() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700">Planned Quantity</label>
-                    <input
-                      type="number"
-                      min="1"
-                      step="0.01"
-                      value={formData.planned_quantity || 1}
-                      onChange={(e) => setFormData({ ...formData, planned_quantity: parseFloat(e.target.value) || 1 })}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
-                    />
-                    {formErrors.planned_quantity && <p className="text-red-500 text-xs mt-1">{formErrors.planned_quantity}</p>}
-                  </div>
+                <div className={`grid gap-4 ${isMultipleProducts ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                  {!isMultipleProducts && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">Planned Quantity</label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="0.01"
+                        value={formData.planned_quantity || 1}
+                        onChange={(e) => setFormData({ ...formData, planned_quantity: parseFloat(e.target.value) || 1 })}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                      />
+                      {formErrors.planned_quantity && <p className="text-red-500 text-xs mt-1">{formErrors.planned_quantity}</p>}
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700">Priority (1-10)</label>
@@ -1310,13 +1701,15 @@ export default function ProductionOrdersPage() {
                   </button>
                   <button
                     type="submit"
-                    disabled={createOrder.isPending || createOrderWithAnalysis.isPending || updateOrder.isPending}
+                    disabled={createOrder.isPending || createMultipleOrders.isPending || createOrderWithAnalysis.isPending || updateOrder.isPending}
                     className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
                   >
-                    {createOrder.isPending || createOrderWithAnalysis.isPending || updateOrder.isPending
+                    {createOrder.isPending || createMultipleOrders.isPending || createOrderWithAnalysis.isPending || updateOrder.isPending
                       ? 'Saving...'
                       : editingOrder
                       ? 'Update'
+                      : isMultipleProducts
+                      ? 'Create Multiple Orders'
                       : autoCreateMissing
                       ? 'Create with Dependencies'
                       : 'Create'
@@ -1461,7 +1854,7 @@ export default function ProductionOrdersPage() {
                   )}
 
                   {/* Component Details */}
-                  {showComponents && orderComponents && Array.isArray(orderComponents) && (
+                  {showComponents && orderComponents && Array.isArray(orderComponents) && orderComponents.length > 0 && (
                     <div className="space-y-3">
                       <h5 className="text-sm font-medium text-gray-700">Components ({orderComponents.length})</h5>
                       <div className="space-y-2 max-h-60 overflow-y-auto">

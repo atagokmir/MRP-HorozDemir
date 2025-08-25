@@ -810,6 +810,103 @@ def list_stock_movements(
     return StockMovementList(movements=[], total_count=0)
 
 
+@router.get("/reservations")
+def list_stock_reservations(
+    pagination: PaginationParams = Depends(get_pagination_params),
+    product_id: Optional[int] = Query(None, description="Filter by product ID"),
+    warehouse_id: Optional[int] = Query(None, description="Filter by warehouse ID"),
+    reserved_for_type: Optional[str] = Query(None, description="Filter by reservation type (e.g., PRODUCTION_ORDER)"),
+    reserved_for_id: Optional[int] = Query(None, description="Filter by specific reservation ID"),
+    status: Optional[str] = Query(None, description="Filter by reservation status"),
+    session: Session = Depends(get_db),
+    # current_user: UserInfo = Depends(require_permissions("read:inventory"))  # Temporarily disabled for testing
+):
+    """
+    List stock reservations with comprehensive filtering.
+    
+    Shows active, consumed, and released reservations with details.
+    """
+    from models.production import StockReservation
+    from sqlalchemy.orm import joinedload
+    
+    # Build base query with joins for efficiency
+    query = session.query(StockReservation).options(
+        joinedload(StockReservation.product),
+        joinedload(StockReservation.warehouse)
+    )
+    
+    # Apply filters
+    if product_id:
+        query = query.filter(StockReservation.product_id == product_id)
+    
+    if warehouse_id:
+        query = query.filter(StockReservation.warehouse_id == warehouse_id)
+    
+    if reserved_for_type:
+        query = query.filter(StockReservation.reserved_for_type == reserved_for_type)
+    
+    if reserved_for_id:
+        query = query.filter(StockReservation.reserved_for_id == reserved_for_id)
+    
+    if status:
+        query = query.filter(StockReservation.status == status)
+    
+    # Get total count for pagination
+    total_count = query.count()
+    
+    # Apply pagination and ordering
+    query = query.order_by(desc(StockReservation.reservation_date))
+    items = query.offset(pagination.offset).limit(pagination.page_size).all()
+    
+    # Calculate pagination info
+    total_pages = (total_count + pagination.page_size - 1) // pagination.page_size
+    has_next = pagination.page < total_pages
+    has_previous = pagination.page > 1
+    
+    # Convert to response format
+    reservations = []
+    for reservation in items:
+        reservation_dict = {
+            'reservation_id': reservation.reservation_id,
+            'product_id': reservation.product_id,
+            'warehouse_id': reservation.warehouse_id,
+            'reserved_quantity': float(reservation.reserved_quantity),
+            'reserved_for_type': reservation.reserved_for_type,
+            'reserved_for_id': reservation.reserved_for_id,
+            'reservation_date': reservation.reservation_date.isoformat() if reservation.reservation_date else None,
+            'expiry_date': reservation.expiry_date.isoformat() if reservation.expiry_date else None,
+            'status': reservation.status,
+            'reserved_by': reservation.reserved_by,
+            'notes': reservation.notes,
+            'created_at': reservation.created_at.isoformat() if reservation.created_at else None,
+            'updated_at': reservation.updated_at.isoformat() if reservation.updated_at else None,
+            'product': {
+                'product_id': reservation.product.product_id,
+                'product_code': reservation.product.product_code,
+                'product_name': reservation.product.product_name,
+                'unit_of_measure': reservation.product.unit_of_measure
+            } if reservation.product else None,
+            'warehouse': {
+                'warehouse_id': reservation.warehouse.warehouse_id,
+                'warehouse_code': reservation.warehouse.warehouse_code,
+                'warehouse_name': reservation.warehouse.warehouse_name
+            } if reservation.warehouse else None
+        }
+        reservations.append(reservation_dict)
+    
+    return PaginatedResponse(
+        items=reservations,
+        pagination={
+            "total_count": total_count,
+            "page": pagination.page,
+            "page_size": pagination.page_size,
+            "total_pages": total_pages,
+            "has_next": has_next,
+            "has_previous": has_previous
+        }
+    )
+
+
 @router.get("/critical-stock")  # TODO: response_model=CriticalStockReport)
 def get_critical_stock_report(
     warehouse_id: Optional[int] = Query(None, description="Filter by warehouse ID"),

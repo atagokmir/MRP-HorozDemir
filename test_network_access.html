@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MRP System Network Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-result { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background-color: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+        .error { background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+        .info { background-color: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; }
+        button { padding: 10px 20px; margin: 5px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>Horoz Demir MRP System - Network Connectivity Test</h1>
+    
+    <div class="info">
+        <strong>Test Instructions:</strong>
+        <ol>
+            <li>Frontend should be accessible at: <strong>http://192.168.1.172:3001</strong></li>
+            <li>Backend API should be accessible at: <strong>http://192.168.1.172:8000</strong></li>
+            <li>Click the buttons below to test connectivity from this device</li>
+        </ol>
+    </div>
+
+    <h2>Connectivity Tests</h2>
+    
+    <button onclick="testBackendHealth()">Test Backend Health</button>
+    <button onclick="testBackendAPI()">Test Backend API</button>
+    <button onclick="testFrontend()">Test Frontend</button>
+    <button onclick="testCORS()">Test CORS Policy</button>
+    
+    <div id="results"></div>
+
+    <script>
+        const API_BASE = 'http://192.168.1.172:8000';
+        const FRONTEND_BASE = 'http://192.168.1.172:3001';
+        
+        function addResult(message, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `test-result ${type}`;
+            div.innerHTML = `<strong>${new Date().toLocaleTimeString()}:</strong> ${message}`;
+            results.appendChild(div);
+        }
+        
+        async function testBackendHealth() {
+            try {
+                addResult('Testing backend health endpoint...', 'info');
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                
+                if (response.ok && data.status === 'healthy') {
+                    addResult(`✅ Backend health check passed: ${JSON.stringify(data)}`, 'success');
+                } else {
+                    addResult(`❌ Backend health check failed: ${response.status} - ${JSON.stringify(data)}`, 'error');
+                }
+            } catch (error) {
+                addResult(`❌ Backend health check failed: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testBackendAPI() {
+            try {
+                addResult('Testing backend API endpoint...', 'info');
+                const response = await fetch(`${API_BASE}/api/v1/master-data/warehouses?page=1&page_size=5`);
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    addResult(`✅ Backend API test passed: Retrieved ${data.data?.items?.length || 0} warehouses`, 'success');
+                } else {
+                    addResult(`❌ Backend API test failed: ${response.status} - ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                addResult(`❌ Backend API test failed: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testFrontend() {
+            try {
+                addResult('Testing frontend accessibility...', 'info');
+                const response = await fetch(`${FRONTEND_BASE}`, { method: 'HEAD' });
+                
+                if (response.ok) {
+                    addResult('✅ Frontend is accessible from network', 'success');
+                } else {
+                    addResult(`❌ Frontend test failed: ${response.status} - ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                addResult(`❌ Frontend test failed: ${error.message}`, 'error');
+            }
+        }
+        
+        async function testCORS() {
+            try {
+                addResult('Testing CORS configuration...', 'info');
+                const response = await fetch(`${API_BASE}/health`, {
+                    method: 'GET',
+                    headers: {
+                        'Origin': window.location.origin,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    const corsHeaders = {
+                        'Access-Control-Allow-Origin': response.headers.get('Access-Control-Allow-Origin'),
+                        'Access-Control-Allow-Methods': response.headers.get('Access-Control-Allow-Methods'),
+                        'Access-Control-Allow-Headers': response.headers.get('Access-Control-Allow-Headers')
+                    };
+                    addResult(`✅ CORS test passed: ${JSON.stringify(corsHeaders)}`, 'success');
+                } else {
+                    addResult(`❌ CORS test failed: ${response.status} - ${response.statusText}`, 'error');
+                }
+            } catch (error) {
+                addResult(`❌ CORS test failed: ${error.message}`, 'error');
+            }
+        }
+        
+        // Auto-run basic tests on page load
+        window.addEventListener('load', function() {
+            addResult('🚀 Network connectivity test page loaded', 'info');
+            addResult('Click the buttons above to run connectivity tests', 'info');
+        });
+    </script>
+</body>
+</html>

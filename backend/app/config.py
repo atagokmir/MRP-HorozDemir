@@ -28,8 +28,14 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "https://localhost:3000"
+        "https://localhost:3000",
+        "http://192.168.1.172:3000",
+        "https://192.168.1.172:3000"
     ]
+    
+    # Allow local network access in development
+    ALLOW_LOCAL_NETWORK: bool = True
+    LOCAL_NETWORK_RANGES: List[str] = ["192.168.1.", "10.0.0.", "172.16."]
     ALLOWED_HOSTS: List[str] = ["*"]
     
     # Application Settings
@@ -103,6 +109,7 @@ class DevelopmentConfig(Settings):
     DEBUG: bool = True
     DB_ECHO: bool = True
     LOG_LEVEL: str = "DEBUG"
+    ALLOW_LOCAL_NETWORK: bool = True
 
 
 class ProductionConfig(Settings):
@@ -110,6 +117,7 @@ class ProductionConfig(Settings):
     DEBUG: bool = False
     DB_ECHO: bool = False
     LOG_LEVEL: str = "WARNING"
+    ALLOW_LOCAL_NETWORK: bool = False
     ALLOWED_HOSTS: List[str] = ["your-domain.com", "www.your-domain.com"]
 
 

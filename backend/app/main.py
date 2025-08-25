@@ -17,6 +17,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from loguru import logger
 import uvicorn
+import re
 
 from app.config import settings
 from app.exceptions import MRPException, create_http_exception
@@ -31,6 +32,60 @@ from app.api.reporting import router as reporting_router
 
 # Rate limiting setup
 limiter = Limiter(key_func=get_remote_address)
+
+
+def is_allowed_origin(origin: str) -> bool:
+    """Check if origin is allowed, including local network ranges."""
+    # Check explicit allowed origins first
+    if origin in settings.ALLOWED_ORIGINS:
+        return True
+    
+    # Check local network ranges if enabled
+    if settings.ALLOW_LOCAL_NETWORK and origin:
+        # Parse origin to extract host
+        import re
+        match = re.match(r'https?://([^:/]+)(?::\d+)?', origin)
+        if match:
+            host = match.group(1)
+            # Check if host matches any local network range
+            for network_range in settings.LOCAL_NETWORK_RANGES:
+                if host.startswith(network_range):
+                    # Additional validation to ensure it's a valid IP in range
+                    try:
+                        last_octet = int(host.split('.')[-1])
+                        if 1 <= last_octet <= 254:
+                            return True
+                    except (ValueError, IndexError):
+                        continue
+    
+    return False
+
+
+def get_cors_origins():
+    """Get CORS origins - use wildcard for development with local network access."""
+    if settings.ALLOW_LOCAL_NETWORK:
+        return ["*"]  # Allow all origins in development with validation middleware
+    return settings.ALLOWED_ORIGINS
+
+
+async def origin_validation_middleware(request: Request, call_next):
+    """Validate origins when using wildcard CORS for local network access."""
+    if settings.ALLOW_LOCAL_NETWORK:
+        origin = request.headers.get("origin")
+        if origin and not is_allowed_origin(origin):
+            # Log suspicious requests
+            logger.warning(f"Blocked request from unauthorized origin: {origin}")
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "status": "error",
+                    "message": "Origin not allowed",
+                    "error_code": "ORIGIN_NOT_ALLOWED"
+                }
+            )
+    
+    response = await call_next(request)
+    return response
 
 
 def create_application() -> FastAPI:
@@ -51,9 +106,12 @@ def create_application() -> FastAPI:
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     
     # Configure CORS middleware
+    cors_origins = get_cors_origins()
+    logger.info(f"CORS configured with origins: {cors_origins}")
+    
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.ALLOWED_ORIGINS,
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
@@ -66,6 +124,10 @@ def create_application() -> FastAPI:
             TrustedHostMiddleware,
             allowed_hosts=settings.ALLOWED_HOSTS
         )
+    
+    # Add origin validation middleware for local network access
+    if settings.ALLOW_LOCAL_NETWORK:
+        app.middleware("http")(origin_validation_middleware)
     
     return app
 

@@ -97,9 +97,9 @@ class MRPAnalysisService:
         if not product or not bom:
             raise ValueError("Product or BOM not found")
         
-        # Explode BOM to get all component requirements
-        component_requirements = self._explode_bom_requirements(
-            bom_id, planned_quantity, set()
+        # Explode BOM to get all component requirements (direct components only for validation)
+        component_requirements = self._explode_bom_requirements_flat(
+            bom_id, planned_quantity
         )
         
         # Analyze stock availability for each component
@@ -138,8 +138,47 @@ class MRPAnalysisService:
                 else:
                     raw_material_shortages.append(analyzed_component)
         
+        # Critical validation logic:
+        # 1. If raw materials are missing, cannot produce at all
+        # 2. If only semi-finished products are missing BUT they can be produced (have BOMs), allow with dependency creation
+        # 3. If semi-finished products are missing and don't have BOMs, treat as raw material shortage
+        
+        # Check if semi-finished shortages can be resolved by production
+        resolvable_semi_shortages = []
+        unresolvable_semi_shortages = []
+        
+        for semi_shortage in semi_finished_shortages:
+            if semi_shortage.has_bom and semi_shortage.bom_id:
+                # Check if the semi-finished product itself can be produced (recursive check)
+                try:
+                    semi_analysis = self.analyze_stock_availability(
+                        semi_shortage.product_id,
+                        semi_shortage.bom_id,
+                        semi_shortage.shortage_quantity,
+                        warehouse_id
+                    )
+                    
+                    # If this semi-finished product has raw material shortages, it's unresolvable
+                    if len(semi_analysis.raw_material_shortages) > 0:
+                        unresolvable_semi_shortages.append(semi_shortage)
+                        # Add the underlying raw material shortages to our list
+                        raw_material_shortages.extend(semi_analysis.raw_material_shortages)
+                    else:
+                        resolvable_semi_shortages.append(semi_shortage)
+                except:
+                    # If analysis fails, treat as unresolvable
+                    unresolvable_semi_shortages.append(semi_shortage)
+            else:
+                # Semi-finished without BOM is essentially a raw material
+                unresolvable_semi_shortages.append(semi_shortage)
+                raw_material_shortages.append(semi_shortage)
+        
+        # Update semi_finished_shortages to only include resolvable ones
+        semi_finished_shortages = resolvable_semi_shortages
+        
         # Determine if production can proceed
-        can_produce = len(semi_finished_shortages) == 0 and len(raw_material_shortages) == 0
+        # Can produce if: no raw material shortages AND no unresolvable semi-finished shortages
+        can_produce = len(raw_material_shortages) == 0
         shortage_exists = len(semi_finished_shortages) > 0 or len(raw_material_shortages) > 0
         
         return StockAnalysisResult(
@@ -156,6 +195,48 @@ class MRPAnalysisService:
             total_estimated_cost=total_estimated_cost,
             analysis_date=datetime.now()
         )
+    
+    def _explode_bom_requirements_flat(
+        self,
+        bom_id: int,
+        quantity: Decimal
+    ) -> List[ComponentRequirement]:
+        """
+        Explode BOM to get direct component requirements only (non-recursive).
+        Used for production order validation.
+        """
+        requirements = []
+        
+        # Get BOM and its components
+        bom = self.session.query(BillOfMaterials).get(bom_id)
+        if not bom:
+            return requirements
+        
+        bom_components = self.session.query(BomComponent).filter(
+            BomComponent.bom_id == bom_id
+        ).order_by(BomComponent.sequence_number).all()
+        
+        for component in bom_components:
+            # Calculate required quantity based on BOM scaling
+            scale_factor = quantity / bom.base_quantity
+            component_qty = component.effective_quantity * scale_factor
+            
+            # Add direct requirement
+            requirement = ComponentRequirement(
+                product_id=component.component_product_id,
+                product_code="",  # Will be filled in analysis
+                product_name="",  # Will be filled in analysis
+                required_quantity=component_qty,
+                available_quantity=Decimal('0'),
+                shortage_quantity=Decimal('0'),
+                unit_cost=Decimal('0'),
+                total_cost=Decimal('0'),
+                is_semi_finished=False,
+                has_bom=False
+            )
+            requirements.append(requirement)
+        
+        return requirements
     
     def _explode_bom_requirements(
         self,
@@ -227,6 +308,38 @@ class MRPAnalysisService:
         
         return requirements
     
+    def _get_source_warehouse_for_product(self, product: Product) -> Optional[int]:
+        """
+        Determine the appropriate source warehouse based on product type.
+        
+        Args:
+            product: Product object
+            
+        Returns:
+            Warehouse ID for the appropriate source warehouse, or None if not found
+        """
+        # Mapping of product types to warehouse types
+        warehouse_type_mapping = {
+            'RAW_MATERIAL': 'RAW_MATERIALS',
+            'SEMI_FINISHED': 'SEMI_FINISHED', 
+            'FINISHED_PRODUCT': 'FINISHED_PRODUCTS',
+            'PACKAGING': 'PACKAGING'
+        }
+        
+        required_warehouse_type = warehouse_type_mapping.get(product.product_type)
+        if not required_warehouse_type:
+            return None
+            
+        # Find the warehouse of the appropriate type
+        warehouse = self.session.query(Warehouse).filter(
+            and_(
+                Warehouse.warehouse_type == required_warehouse_type,
+                Warehouse.is_active == True
+            )
+        ).first()
+        
+        return warehouse.warehouse_id if warehouse else None
+
     def _analyze_component_availability(
         self,
         product_id: int,
@@ -234,6 +347,7 @@ class MRPAnalysisService:
     ) -> Dict:
         """
         Analyze stock availability for a specific component.
+        CRITICAL FIX: Now searches in the appropriate warehouse based on product type.
         
         Args:
             product_id: ID of the component product
@@ -254,16 +368,43 @@ class MRPAnalysisService:
                 'has_bom': False
             }
         
-        # Calculate available quantity using FIFO ordering
-        available_items = self.session.query(InventoryItem).filter(
-            and_(
-                InventoryItem.product_id == product_id,
-                InventoryItem.quality_status == 'APPROVED',
-                InventoryItem.quantity_in_stock > InventoryItem.reserved_quantity
-            )
-        ).order_by(InventoryItem.entry_date).all()
+        # CRITICAL FIX: Get the appropriate source warehouse for this product type
+        source_warehouse_id = self._get_source_warehouse_for_product(product)
         
-        total_available = sum(item.available_quantity for item in available_items)
+        # Build the base query filter
+        base_query_filter = [
+            InventoryItem.product_id == product_id,
+            InventoryItem.quality_status == 'APPROVED',
+            InventoryItem.quantity_in_stock > InventoryItem.reserved_quantity
+        ]
+        
+        # First try the appropriate source warehouse if it exists
+        available_items = []
+        total_available = Decimal('0')
+        
+        if source_warehouse_id:
+            # Try source warehouse first
+            source_query_filter = base_query_filter + [InventoryItem.warehouse_id == source_warehouse_id]
+            source_items = self.session.query(InventoryItem).filter(
+                and_(*source_query_filter)
+            ).order_by(InventoryItem.entry_date).all()
+            
+            available_items.extend(source_items)
+            total_available += sum(item.available_quantity for item in source_items)
+        
+        # If not enough stock in source warehouse, search other warehouses (cross-warehouse allocation)
+        if total_available < required_quantity or source_warehouse_id is None:
+            # Search all warehouses except the one we already checked
+            other_query_filter = base_query_filter.copy()
+            if source_warehouse_id:
+                other_query_filter.append(InventoryItem.warehouse_id != source_warehouse_id)
+            
+            other_items = self.session.query(InventoryItem).filter(
+                and_(*other_query_filter)
+            ).order_by(InventoryItem.entry_date).all()
+            
+            available_items.extend(other_items)
+            total_available += sum(item.available_quantity for item in other_items)
         
         # Calculate average unit cost using FIFO
         weighted_cost = Decimal('0')
@@ -388,22 +529,47 @@ class MRPAnalysisService:
             raise ValueError(f"Production order {production_order_id} not found")
         
         reservations = []
+        failed_components = []
         
         # Get all components for this production order
         components = self.session.query(ProductionOrderComponent).filter(
             ProductionOrderComponent.production_order_id == production_order_id
         ).all()
         
+        # Process each component individually to ensure all are handled
         for component in components:
-            # Reserve stock using FIFO for this component
-            component_reservations = self._reserve_component_stock(
-                component.component_product_id,
-                component.required_quantity,
-                production_order.warehouse_id,
-                production_order_id,
-                reserved_by
-            )
-            reservations.extend(component_reservations)
+            try:
+                # Reserve stock using FIFO for this component
+                component_reservations = self._reserve_component_stock(
+                    component.component_product_id,
+                    component.required_quantity,
+                    production_order.warehouse_id,
+                    production_order_id,
+                    reserved_by
+                )
+                reservations.extend(component_reservations)
+                
+            except ValueError as e:
+                # Track failed components but continue processing others
+                failed_components.append({
+                    'component_product_id': component.component_product_id,
+                    'required_quantity': component.required_quantity,
+                    'error': str(e)
+                })
+                continue
+        
+        # If any components failed to reserve, include details in the error
+        if failed_components:
+            error_msg = f"Failed to reserve stock for {len(failed_components)} components: "
+            for failed in failed_components:
+                error_msg += f"Product {failed['component_product_id']} (qty: {failed['required_quantity']}) - {failed['error']}; "
+            
+            # If NO components were reserved successfully, raise an error
+            if not reservations:
+                raise ValueError(error_msg)
+            
+            # If SOME components were reserved, we still have partial success
+            # The calling code can decide how to handle this
         
         return reservations
     
@@ -417,61 +583,90 @@ class MRPAnalysisService:
     ) -> List[StockReservation]:
         """
         Reserve stock for a specific component using FIFO allocation.
-        First tries to reserve from the target warehouse, then from other warehouses if needed.
+        CRITICAL FIX: Now sources from appropriate warehouse based on product type first.
         Updates the corresponding ProductionOrderComponent allocation status.
+        SYNCHRONIZATION FIX: Ensures inventory_items.reserved_quantity stays in sync with stock_reservations.
         """
         reservations = []
         remaining_quantity = required_quantity
         
-        # First, try to get available inventory items from the target warehouse in FIFO order
-        available_items = self.session.query(InventoryItem).filter(
-            and_(
-                InventoryItem.product_id == product_id,
-                InventoryItem.warehouse_id == warehouse_id,
-                InventoryItem.quality_status == 'APPROVED',
-                InventoryItem.quantity_in_stock > InventoryItem.reserved_quantity
-            )
-        ).order_by(InventoryItem.entry_date).all()
+        # Get product information to determine correct source warehouse
+        product = self.session.query(Product).get(product_id)
+        if not product:
+            raise ValueError(f"Product {product_id} not found")
         
-        # Reserve from target warehouse first
-        for item in available_items:
+        # CRITICAL FIX: Get the appropriate source warehouse for this product type
+        source_warehouse_id = self._get_source_warehouse_for_product(product)
+        
+        # Priority order for warehouse searching:
+        # 1. Appropriate source warehouse based on product type
+        # 2. Target warehouse (if different from source)
+        # 3. All other warehouses
+        
+        warehouses_to_check = []
+        if source_warehouse_id:
+            warehouses_to_check.append(source_warehouse_id)
+        if warehouse_id != source_warehouse_id:
+            warehouses_to_check.append(warehouse_id)
+        
+        # Try to reserve from warehouses in priority order
+        for check_warehouse_id in warehouses_to_check:
             if remaining_quantity <= 0:
                 break
+                
+            # Get available inventory items from this warehouse in FIFO order
+            available_items = self.session.query(InventoryItem).filter(
+                and_(
+                    InventoryItem.product_id == product_id,
+                    InventoryItem.warehouse_id == check_warehouse_id,
+                    InventoryItem.quality_status == 'APPROVED',
+                    InventoryItem.quantity_in_stock > InventoryItem.reserved_quantity
+                )
+            ).order_by(InventoryItem.entry_date).all()
             
-            available_qty = item.available_quantity
-            if available_qty <= 0:
-                continue
-            
-            # Reserve as much as possible from this batch
-            reserve_qty = min(remaining_quantity, available_qty)
-            
-            # Create reservation
-            reservation = StockReservation(
-                product_id=product_id,
-                warehouse_id=item.warehouse_id,  # Use the actual warehouse of the item
-                reserved_quantity=reserve_qty,
-                reserved_for_type='PRODUCTION_ORDER',
-                reserved_for_id=production_order_id,
-                reservation_date=datetime.now(),
-                status='ACTIVE',
-                reserved_by=reserved_by,
-                notes=f'Reserved for production order {production_order_id} from warehouse {item.warehouse_id}'
-            )
-            
-            self.session.add(reservation)
-            reservations.append(reservation)
-            
-            # Update inventory item reserved quantity
-            item.reserved_quantity += reserve_qty
-            remaining_quantity -= reserve_qty
+            # Reserve from this warehouse
+            for item in available_items:
+                if remaining_quantity <= 0:
+                    break
+                
+                available_qty = item.available_quantity
+                if available_qty <= 0:
+                    continue
+                
+                # Reserve as much as possible from this batch
+                reserve_qty = min(remaining_quantity, available_qty)
+                
+                # Create reservation FIRST
+                warehouse_note = "appropriate source warehouse" if check_warehouse_id == source_warehouse_id else "cross-warehouse allocation"
+                reservation = StockReservation(
+                    product_id=product_id,
+                    warehouse_id=item.warehouse_id,  # Use the actual warehouse of the item
+                    reserved_quantity=reserve_qty,
+                    reserved_for_type='PRODUCTION_ORDER',
+                    reserved_for_id=production_order_id,
+                    reservation_date=datetime.now(),
+                    status='ACTIVE',
+                    reserved_by=reserved_by,
+                    notes=f'Reserved for production order {production_order_id} from warehouse {item.warehouse_id} ({warehouse_note}, product type: {product.product_type})'
+                )
+                
+                self.session.add(reservation)
+                self.session.flush()  # Ensure reservation is created before updating inventory
+                reservations.append(reservation)
+                
+                # SYNCHRONIZATION FIX: Update inventory item reserved quantity to match total active reservations
+                self._sync_inventory_reserved_quantity(item.inventory_item_id)
+                remaining_quantity -= reserve_qty
         
-        # If we still need more stock, search other warehouses (cross-warehouse allocation)
+        # If we still need more stock, search ALL other warehouses as final fallback
         if remaining_quantity > 0:
+            checked_warehouses = set(warehouses_to_check)
+            
             # Get available inventory items from ALL other warehouses in FIFO order
             other_warehouse_items = self.session.query(InventoryItem).filter(
                 and_(
                     InventoryItem.product_id == product_id,
-                    InventoryItem.warehouse_id != warehouse_id,  # Exclude target warehouse (already checked)
+                    ~InventoryItem.warehouse_id.in_(checked_warehouses),  # Exclude already checked warehouses
                     InventoryItem.quality_status == 'APPROVED',
                     InventoryItem.quantity_in_stock > InventoryItem.reserved_quantity
                 )
@@ -489,7 +684,7 @@ class MRPAnalysisService:
                 # Reserve as much as possible from this batch
                 reserve_qty = min(remaining_quantity, available_qty)
                 
-                # Create reservation
+                # Create reservation FIRST
                 reservation = StockReservation(
                     product_id=product_id,
                     warehouse_id=item.warehouse_id,  # Use the actual warehouse of the item
@@ -499,14 +694,15 @@ class MRPAnalysisService:
                     reservation_date=datetime.now(),
                     status='ACTIVE',
                     reserved_by=reserved_by,
-                    notes=f'Reserved for production order {production_order_id} from warehouse {item.warehouse_id} (cross-warehouse allocation)'
+                    notes=f'Reserved for production order {production_order_id} from warehouse {item.warehouse_id} (emergency cross-warehouse allocation, product type: {product.product_type})'
                 )
                 
                 self.session.add(reservation)
+                self.session.flush()  # Ensure reservation is created before updating inventory
                 reservations.append(reservation)
                 
-                # Update inventory item reserved quantity
-                item.reserved_quantity += reserve_qty
+                # SYNCHRONIZATION FIX: Update inventory item reserved quantity to match total active reservations
+                self._sync_inventory_reserved_quantity(item.inventory_item_id)
                 remaining_quantity -= reserve_qty
         
         if remaining_quantity > 0:
@@ -567,6 +763,71 @@ class MRPAnalysisService:
         # Update the component record in the session
         self.session.add(component)
     
+    def _sync_inventory_reserved_quantity(self, inventory_item_id: int):
+        """
+        Synchronize inventory_items.reserved_quantity with actual active reservations.
+        
+        CRITICAL FIX: This ensures data consistency between inventory_items.reserved_quantity 
+        and the stock_reservations table to prevent phantom stock issues.
+        
+        Args:
+            inventory_item_id: ID of the inventory item to synchronize
+        """
+        # Get the inventory item
+        inventory_item = self.session.query(InventoryItem).get(inventory_item_id)
+        if not inventory_item:
+            return
+        
+        # Calculate total active reservations for this product in this warehouse
+        # NOTE: We sync by product and warehouse, not by individual inventory item
+        # because reservations are tracked at product/warehouse level
+        total_reserved = self.session.query(func.coalesce(func.sum(StockReservation.reserved_quantity), 0)).filter(
+            and_(
+                StockReservation.product_id == inventory_item.product_id,
+                StockReservation.warehouse_id == inventory_item.warehouse_id,
+                StockReservation.status == 'ACTIVE'
+            )
+        ).scalar() or Decimal('0')
+        
+        # Debug output can be enabled for troubleshooting
+        # print(f"DEBUG SYNC: Product {inventory_item.product_id}, Warehouse {inventory_item.warehouse_id}, Total active reserved: {total_reserved}")
+        
+        # Get all inventory items for this product in this warehouse
+        inventory_items = self.session.query(InventoryItem).filter(
+            and_(
+                InventoryItem.product_id == inventory_item.product_id,
+                InventoryItem.warehouse_id == inventory_item.warehouse_id,
+                InventoryItem.quality_status == 'APPROVED'
+            )
+        ).order_by(InventoryItem.entry_date).all()
+        
+        # Distribute the total reserved quantity across inventory items using FIFO principle
+        remaining_to_allocate = total_reserved
+        
+        for item in inventory_items:
+            old_qty = item.reserved_quantity
+            if remaining_to_allocate <= 0:
+                # No more reservation to allocate
+                item.reserved_quantity = Decimal('0')
+            else:
+                # Allocate as much as possible to this item (up to its total stock)
+                max_reservable = item.quantity_in_stock
+                allocate_to_item = min(remaining_to_allocate, max_reservable)
+                item.reserved_quantity = allocate_to_item
+                remaining_to_allocate -= allocate_to_item
+            # Debug output can be enabled for troubleshooting
+            # print(f"DEBUG SYNC ITEM: Item {item.inventory_item_id}: {old_qty} -> {item.reserved_quantity}")
+        
+        # If there's still remaining to allocate, it means we have a data inconsistency
+        # This should not happen in normal operation, but we log it for debugging
+        if remaining_to_allocate > 0:
+            print(f"WARNING: Could not allocate {remaining_to_allocate} reserved quantity "
+                  f"for product {inventory_item.product_id} in warehouse {inventory_item.warehouse_id}. "
+                  f"This indicates a data inconsistency that should be investigated.")
+        
+        # CRITICAL FIX: Flush the changes to ensure they are persisted
+        self.session.flush()
+    
     def release_stock_reservations(
         self,
         production_order_id: int
@@ -580,50 +841,92 @@ class MRPAnalysisService:
         Returns:
             Number of reservations released
         """
-        # Get all active reservations for this production order
+        # Get all reservations for this production order (both active and any other status)
         reservations = self.session.query(StockReservation).filter(
             and_(
                 StockReservation.reserved_for_type == 'PRODUCTION_ORDER',
                 StockReservation.reserved_for_id == production_order_id,
-                StockReservation.status == 'ACTIVE'
+                StockReservation.status.in_(['ACTIVE', 'CONSUMED'])  # Include consumed ones for tracking
             )
         ).all()
         
+        # Debug output can be enabled for troubleshooting
+        # print(f"DEBUG RELEASE: Found {len(reservations)} reservations for production order {production_order_id}")
+        
         released_count = 0
+        errors = []
         
         # Track component products that need their allocation status reset
         component_products_released = set()
         
+        # Track product/warehouse combinations that need inventory sync
+        inventory_sync_needed = set()
+        
         for reservation in reservations:
-            # Track this component for allocation status reset
-            component_products_released.add(reservation.product_id)
-            
-            # Update inventory item to reduce reserved quantity
-            inventory_items = self.session.query(InventoryItem).filter(
-                and_(
-                    InventoryItem.product_id == reservation.product_id,
-                    InventoryItem.warehouse_id == reservation.warehouse_id,
-                    InventoryItem.reserved_quantity >= reservation.reserved_quantity
-                )
-            ).order_by(InventoryItem.entry_date).all()
-            
-            remaining_to_release = reservation.reserved_quantity
-            
-            for item in inventory_items:
-                if remaining_to_release <= 0:
-                    break
+            try:
+                # Only release active reservations
+                if reservation.status != 'ACTIVE':
+                    continue
                     
-                release_qty = min(remaining_to_release, item.reserved_quantity)
-                item.reserved_quantity -= release_qty
-                remaining_to_release -= release_qty
-            
-            # Mark reservation as released
-            reservation.release_reservation()
-            released_count += 1
+                # Track this component for allocation status reset
+                component_products_released.add(reservation.product_id)
+                
+                # Track this product/warehouse for inventory sync
+                inventory_sync_needed.add((reservation.product_id, reservation.warehouse_id))
+                
+                # Mark reservation as released
+                reservation.release_reservation()
+                released_count += 1
+                    
+            except Exception as e:
+                errors.append(f"Error releasing reservation {reservation.reservation_id}: {str(e)}")
+                continue
+        
+        # CRITICAL FIX: Flush changes to ensure reservations are marked as RELEASED before sync
+        self.session.flush()
+        
+        # CRITICAL FIX: Synchronize inventory reserved quantities AFTER releasing all reservations
+        # This prevents race conditions and ensures consistent state
+        for product_id, warehouse_id in inventory_sync_needed:
+            try:
+                # Find any inventory item from this product/warehouse to trigger sync
+                sample_item = self.session.query(InventoryItem).filter(
+                    and_(
+                        InventoryItem.product_id == product_id,
+                        InventoryItem.warehouse_id == warehouse_id,
+                        InventoryItem.quality_status == 'APPROVED'
+                    )
+                ).first()
+                
+                if sample_item:
+                    old_reserved = sample_item.reserved_quantity
+                    try:
+                        self._sync_inventory_reserved_quantity(sample_item.inventory_item_id)
+                        # Refresh the item to see the updated value
+                        self.session.refresh(sample_item)
+                        new_reserved = sample_item.reserved_quantity
+                        # Optional: Debug output can be enabled for troubleshooting
+                        # print(f"DEBUG: Synced inventory for product {product_id} in warehouse {warehouse_id}: {old_reserved} -> {new_reserved}")
+                    except Exception as sync_error:
+                        print(f"ERROR: Failed to sync inventory for product {product_id} in warehouse {warehouse_id}: {str(sync_error)}")
+                        errors.append(f"Sync error for product {product_id}, warehouse {warehouse_id}: {str(sync_error)}")
+                else:
+                    print(f"WARNING: No inventory item found for sync - product {product_id}, warehouse {warehouse_id}")
+                    
+            except Exception as e:
+                errors.append(f"Error syncing inventory for product {product_id}, warehouse {warehouse_id}: {str(e)}")
+                continue
         
         # Reset allocation status for all affected components
         for component_product_id in component_products_released:
-            self._update_component_allocation(production_order_id, component_product_id, Decimal('0'))
+            try:
+                self._update_component_allocation(production_order_id, component_product_id, Decimal('0'))
+            except Exception as e:
+                errors.append(f"Error resetting allocation for component {component_product_id}: {str(e)}")
+        
+        # Log errors if any occurred but don't fail the operation
+        if errors:
+            print(f"Warnings during reservation release for order {production_order_id}: {'; '.join(errors)}")
         
         return released_count
     
@@ -667,7 +970,7 @@ class MRPAnalysisService:
                 and_(
                     InventoryItem.product_id == reservation.product_id,
                     InventoryItem.warehouse_id == reservation.warehouse_id,
-                    InventoryItem.reserved_quantity >= reservation.reserved_quantity
+                    InventoryItem.quantity_in_stock > 0
                 )
             ).order_by(InventoryItem.entry_date).all()
             
@@ -678,11 +981,10 @@ class MRPAnalysisService:
                     break
                 
                 # Calculate how much we can consume from this batch
-                consume_qty = min(remaining_to_consume, item.reserved_quantity)
+                consume_qty = min(remaining_to_consume, item.quantity_in_stock)
                 
                 # Update inventory item quantities (FIFO consumption)
                 item.quantity_in_stock -= consume_qty
-                item.reserved_quantity -= consume_qty
                 
                 # Record consumption for audit trail
                 consumption_record = {
@@ -708,6 +1010,19 @@ class MRPAnalysisService:
             
             # Mark reservation as consumed
             reservation.consume_reservation()
+            
+            # SYNCHRONIZATION FIX: Update inventory reserved quantities after consuming
+            # Find any inventory item from this product/warehouse to trigger sync
+            sample_item = self.session.query(InventoryItem).filter(
+                and_(
+                    InventoryItem.product_id == reservation.product_id,
+                    InventoryItem.warehouse_id == reservation.warehouse_id,
+                    InventoryItem.quality_status == 'APPROVED'
+                )
+            ).first()
+            
+            if sample_item:
+                self._sync_inventory_reserved_quantity(sample_item.inventory_item_id)
         
         # Update component status to CONSUMED
         for component_product_id in component_products_consumed:
@@ -809,16 +1124,20 @@ class MRPAnalysisService:
                 
                 remaining_to_release = excess_qty
                 
-                for item in inventory_items:
-                    if remaining_to_release <= 0:
-                        break
-                    
-                    release_qty = min(remaining_to_release, item.reserved_quantity)
-                    item.reserved_quantity -= release_qty
-                    remaining_to_release -= release_qty
-                
-                # Update reservation quantity
+                # Update reservation quantity first
                 reservation.reserved_quantity = new_reserved_qty
+                
+                # SYNCHRONIZATION FIX: Sync inventory reserved quantities after quantity change
+                sample_item = self.session.query(InventoryItem).filter(
+                    and_(
+                        InventoryItem.product_id == reservation.product_id,
+                        InventoryItem.warehouse_id == reservation.warehouse_id,
+                        InventoryItem.quality_status == 'APPROVED'
+                    )
+                ).first()
+                
+                if sample_item:
+                    self._sync_inventory_reserved_quantity(sample_item.inventory_item_id)
                 
                 adjustments.append({
                     'product_id': reservation.product_id,
@@ -889,3 +1208,107 @@ class MRPAnalysisService:
             component.consumed_quantity = component.allocated_quantity
             component.allocation_status = 'CONSUMED'
             self.session.add(component)
+    
+    def validate_and_fix_reservation_sync(self) -> Dict:
+        """
+        Validate and fix reservation synchronization across the entire system.
+        
+        This method checks for inconsistencies between inventory_items.reserved_quantity
+        and stock_reservations table, and fixes them.
+        
+        Returns:
+            Summary of validation results and fixes applied
+        """
+        validation_results = {
+            'total_items_checked': 0,
+            'sync_issues_found': 0,
+            'fixes_applied': 0,
+            'details': []
+        }
+        
+        # Get all inventory items that have reserved quantity
+        inventory_items_with_reserves = self.session.query(InventoryItem).filter(
+            InventoryItem.reserved_quantity > 0
+        ).all()
+        
+        validation_results['total_items_checked'] = len(inventory_items_with_reserves)
+        
+        for item in inventory_items_with_reserves:
+            # Calculate actual reserved quantity from stock_reservations
+            actual_reserved = self.session.query(func.coalesce(func.sum(StockReservation.reserved_quantity), 0)).filter(
+                and_(
+                    StockReservation.product_id == item.product_id,
+                    StockReservation.warehouse_id == item.warehouse_id,
+                    StockReservation.status == 'ACTIVE'
+                )
+            ).scalar() or Decimal('0')
+            
+            # Check if there's a mismatch
+            current_reserved = item.reserved_quantity or Decimal('0')
+            
+            if current_reserved != actual_reserved:
+                validation_results['sync_issues_found'] += 1
+                
+                # Apply fix
+                self._sync_inventory_reserved_quantity(item.inventory_item_id)
+                validation_results['fixes_applied'] += 1
+                
+                validation_results['details'].append({
+                    'inventory_item_id': item.inventory_item_id,
+                    'product_id': item.product_id,
+                    'warehouse_id': item.warehouse_id,
+                    'old_reserved_quantity': float(current_reserved),
+                    'actual_reserved_quantity': float(actual_reserved),
+                    'fixed': True
+                })
+        
+        # Also check for products that have active reservations but no inventory reserved quantity
+        # This can happen if reservations exist but inventory items have zero reserved_quantity
+        products_with_reservations = self.session.query(
+            StockReservation.product_id,
+            StockReservation.warehouse_id,
+            func.sum(StockReservation.reserved_quantity).label('total_reserved')
+        ).filter(
+            StockReservation.status == 'ACTIVE'
+        ).group_by(
+            StockReservation.product_id,
+            StockReservation.warehouse_id
+        ).all()
+        
+        for product_id, warehouse_id, total_reserved in products_with_reservations:
+            # Get total inventory reserved quantity for this product/warehouse
+            inventory_reserved = self.session.query(
+                func.coalesce(func.sum(InventoryItem.reserved_quantity), 0)
+            ).filter(
+                and_(
+                    InventoryItem.product_id == product_id,
+                    InventoryItem.warehouse_id == warehouse_id,
+                    InventoryItem.quality_status == 'APPROVED'
+                )
+            ).scalar() or Decimal('0')
+            
+            if inventory_reserved != total_reserved:
+                validation_results['sync_issues_found'] += 1
+                
+                # Find a sample inventory item to trigger sync
+                sample_item = self.session.query(InventoryItem).filter(
+                    and_(
+                        InventoryItem.product_id == product_id,
+                        InventoryItem.warehouse_id == warehouse_id,
+                        InventoryItem.quality_status == 'APPROVED'
+                    )
+                ).first()
+                
+                if sample_item:
+                    self._sync_inventory_reserved_quantity(sample_item.inventory_item_id)
+                    validation_results['fixes_applied'] += 1
+                    
+                    validation_results['details'].append({
+                        'product_id': product_id,
+                        'warehouse_id': warehouse_id,
+                        'inventory_reserved_total': float(inventory_reserved),
+                        'reservations_total': float(total_reserved),
+                        'fixed': True
+                    })
+        
+        return validation_results

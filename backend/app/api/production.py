@@ -77,6 +77,80 @@ def validate_bom_and_product(session: Session, product_id: int, bom_id: int) -> 
     return product, bom
 
 
+def _create_production_order_core(order_request: ProductionOrderCreate, allow_partial_stock: bool, session: Session) -> int:
+    """
+    Core business logic for creating a production order.
+    Returns the created production order ID.
+    """
+    # Validate product and BOM
+    product, bom = validate_bom_and_product(
+        session, order_request.product_id, order_request.bom_id
+    )
+    
+    # Check warehouse exists
+    warehouse = session.query(Warehouse).filter(
+        Warehouse.warehouse_id == order_request.warehouse_id
+    ).first()
+    if not warehouse:
+        raise NotFoundError("Warehouse", order_request.warehouse_id)
+    
+    # Generate unique order number
+    order_number = generate_production_order_number(session)
+    
+    # Create production order
+    production_order = ProductionOrder(
+        order_number=order_number,
+        product_id=order_request.product_id,
+        bom_id=order_request.bom_id,
+        warehouse_id=order_request.warehouse_id,
+        order_date=date.today(),
+        planned_start_date=order_request.planned_start_date,
+        planned_completion_date=order_request.planned_completion_date,
+        planned_quantity=order_request.planned_quantity,
+        completed_quantity=Decimal('0'),
+        scrapped_quantity=Decimal('0'),
+        status='PLANNED',
+        priority=order_request.priority,
+        estimated_cost=Decimal('0'),
+        actual_cost=Decimal('0'),
+        notes=order_request.notes
+    )
+    
+    session.add(production_order)
+    session.flush()  # Get the ID
+    
+    # Create components based on BOM
+    components = create_production_order_components(session, production_order, bom)
+    
+    # Flush to ensure components are visible for stock reservation
+    session.flush()
+    
+    # Calculate estimated cost (basic calculation)
+    estimated_cost = Decimal('0')
+    for component in components:
+        # Get average cost from inventory for this component
+        avg_cost = session.query(func.avg(InventoryItem.unit_cost)).filter(
+            and_(
+                InventoryItem.product_id == component.component_product_id,
+                InventoryItem.quantity_in_stock > 0
+            )
+        ).scalar() or Decimal('0')
+        
+        component.unit_cost = avg_cost
+        estimated_cost += Decimal(str(avg_cost)) * component.required_quantity
+    
+    # Add labor and overhead costs from BOM
+    if bom.labor_cost_per_unit:
+        estimated_cost += Decimal(str(bom.labor_cost_per_unit)) * production_order.planned_quantity
+    
+    if bom.overhead_cost_per_unit:
+        estimated_cost += Decimal(str(bom.overhead_cost_per_unit)) * production_order.planned_quantity
+    
+    production_order.estimated_cost = estimated_cost
+    
+    return production_order.production_order_id
+
+
 def create_production_order_components(session: Session, production_order: ProductionOrder, bom: BillOfMaterials) -> List[ProductionOrderComponent]:
     """Create production order components based on BOM."""
     components = []
@@ -115,6 +189,192 @@ def create_production_order_components(session: Session, production_order: Produ
         components.append(po_component)
     
     return components
+
+
+@router.get("/reservations/all", response_model=Dict)
+def get_all_stock_reservations(
+    status: Optional[str] = Query(None, description="Filter by reservation status"),
+    product_id: Optional[int] = Query(None, description="Filter by product ID"),
+    warehouse_id: Optional[int] = Query(None, description="Filter by warehouse ID"),
+    production_order_id: Optional[int] = Query(None, description="Filter by production order ID"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    session: Session = Depends(get_db),
+    # current_user: UserInfo = Depends(require_permissions("read:production"))  # Temporarily disabled for testing
+):
+    """
+    Get all stock reservations with filtering and pagination.
+    
+    Returns comprehensive reservation data across all production orders.
+    """
+    try:
+        # Build base query
+        query = session.query(StockReservation).filter(
+            StockReservation.reserved_for_type == 'PRODUCTION_ORDER'
+        )
+        
+        # Apply filters
+        if status:
+            query = query.filter(StockReservation.status == status)
+        if product_id:
+            query = query.filter(StockReservation.product_id == product_id)
+        if warehouse_id:
+            query = query.filter(StockReservation.warehouse_id == warehouse_id)
+        if production_order_id:
+            query = query.filter(StockReservation.reserved_for_id == production_order_id)
+        
+        # Get total count
+        total_count = query.count()
+        
+        # Apply pagination and ordering
+        reservations = query.order_by(desc(StockReservation.reservation_date)).offset(
+            pagination.offset
+        ).limit(pagination.page_size).all()
+        
+        # Build response with product and warehouse details
+        reservation_details = []
+        for res in reservations:
+            # Get product details
+            product = session.query(Product).get(res.product_id)
+            warehouse = session.query(Warehouse).get(res.warehouse_id)
+            production_order = session.query(ProductionOrder).get(res.reserved_for_id)
+            
+            reservation_details.append({
+                'reservation_id': res.reservation_id,
+                'product': {
+                    'product_id': product.product_id,
+                    'product_code': product.product_code,
+                    'product_name': product.product_name,
+                    'product_type': product.product_type
+                } if product else None,
+                'warehouse': {
+                    'warehouse_id': warehouse.warehouse_id,
+                    'warehouse_code': warehouse.warehouse_code,
+                    'warehouse_name': warehouse.warehouse_name
+                } if warehouse else None,
+                'production_order': {
+                    'production_order_id': production_order.production_order_id,
+                    'order_number': production_order.order_number,
+                    'status': production_order.status
+                } if production_order else None,
+                'reserved_quantity': float(res.reserved_quantity),
+                'status': res.status,
+                'reservation_date': res.reservation_date.isoformat() if res.reservation_date else None,
+                'expiry_date': res.expiry_date.isoformat() if res.expiry_date else None,
+                'reserved_by': res.reserved_by,
+                'notes': res.notes
+            })
+        
+        # Calculate pagination info
+        total_pages = (total_count + pagination.page_size - 1) // pagination.page_size
+        
+        return {
+            'reservations': reservation_details,
+            'pagination': {
+                'total_count': total_count,
+                'page': pagination.page,
+                'page_size': pagination.page_size,
+                'total_pages': total_pages,
+                'has_next': pagination.page < total_pages,
+                'has_previous': pagination.page > 1
+            },
+            'summary': {
+                'total_reservations': total_count,
+                'active_reservations': len([r for r in reservations if r.status == 'ACTIVE']),
+                'consumed_reservations': len([r for r in reservations if r.status == 'CONSUMED']),
+                'released_reservations': len([r for r in reservations if r.status == 'RELEASED'])
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get reservations: {str(e)}")
+
+
+@router.get("/component-allocation-status", response_model=Dict)
+def get_component_allocation_status(
+    status: Optional[str] = Query(None, description="Filter by allocation status"),
+    product_id: Optional[int] = Query(None, description="Filter by component product ID"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    session: Session = Depends(get_db),
+    # current_user: UserInfo = Depends(require_permissions("read:production"))  # Temporarily disabled for testing
+):
+    """
+    Get component allocation status across all production orders.
+    
+    Returns detailed view of component allocation status for monitoring purposes.
+    """
+    try:
+        # Build base query
+        query = session.query(ProductionOrderComponent).options(
+            joinedload(ProductionOrderComponent.component_product),
+            joinedload(ProductionOrderComponent.production_order)
+        )
+        
+        # Apply filters
+        if status:
+            query = query.filter(ProductionOrderComponent.allocation_status == status)
+        if product_id:
+            query = query.filter(ProductionOrderComponent.component_product_id == product_id)
+        
+        # Get total count
+        total_count = query.count()
+        
+        # Apply pagination and ordering
+        components = query.order_by(
+            desc(ProductionOrderComponent.production_order_id)
+        ).offset(pagination.offset).limit(pagination.page_size).all()
+        
+        # Build response
+        component_details = []
+        status_summary = {'NOT_ALLOCATED': 0, 'PARTIALLY_ALLOCATED': 0, 'FULLY_ALLOCATED': 0, 'CONSUMED': 0}
+        
+        for comp in components:
+            status_summary[comp.allocation_status] = status_summary.get(comp.allocation_status, 0) + 1
+            
+            component_details.append({
+                'po_component_id': comp.po_component_id,
+                'production_order': {
+                    'production_order_id': comp.production_order.production_order_id,
+                    'order_number': comp.production_order.order_number,
+                    'status': comp.production_order.status,
+                    'planned_quantity': float(comp.production_order.planned_quantity)
+                } if comp.production_order else None,
+                'component_product': {
+                    'product_id': comp.component_product.product_id,
+                    'product_code': comp.component_product.product_code,
+                    'product_name': comp.component_product.product_name,
+                    'product_type': comp.component_product.product_type
+                } if comp.component_product else None,
+                'required_quantity': float(comp.required_quantity),
+                'allocated_quantity': float(comp.allocated_quantity),
+                'consumed_quantity': float(comp.consumed_quantity),
+                'unit_cost': float(comp.unit_cost),
+                'allocation_status': comp.allocation_status,
+                'allocation_percentage': float((comp.allocated_quantity / comp.required_quantity) * 100) if comp.required_quantity > 0 else 0
+            })
+        
+        # Calculate pagination info
+        total_pages = (total_count + pagination.page_size - 1) // pagination.page_size
+        
+        return {
+            'components': component_details,
+            'pagination': {
+                'total_count': total_count,
+                'page': pagination.page,
+                'page_size': pagination.page_size,
+                'total_pages': total_pages,
+                'has_next': pagination.page < total_pages,
+                'has_previous': pagination.page > 1
+            },
+            'allocation_summary': status_summary,
+            'allocation_statistics': {
+                'total_components': total_count,
+                'fully_allocated_percentage': round((status_summary['FULLY_ALLOCATED'] / total_count) * 100, 2) if total_count > 0 else 0,
+                'not_allocated_percentage': round((status_summary['NOT_ALLOCATED'] / total_count) * 100, 2) if total_count > 0 else 0
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get component allocation status: {str(e)}")
 
 
 @router.get("/", response_model=PaginatedResponse[ProductionOrderResponse])
@@ -329,13 +589,15 @@ def get_production_order(
 @router.post("/", response_model=IDResponse)
 def create_production_order(
     order_request: ProductionOrderCreate,
+    allow_partial_stock: bool = Query(False, description="Allow creation with insufficient stock"),
     session: Session = Depends(get_db),
     # current_user: UserInfo = Depends(require_permissions("write:production"))  # Temporarily disabled for testing
 ):
     """
-    Create new production order.
+    Create new production order with mandatory stock validation.
     
     Performs BOM explosion, stock availability check, and creates component requirements.
+    Only allows creation if raw materials are sufficient.
     """
     try:
         # Validate product and BOM
@@ -350,62 +612,107 @@ def create_production_order(
         if not warehouse:
             raise NotFoundError("Warehouse", order_request.warehouse_id)
         
-        # Generate unique order number
-        order_number = generate_production_order_number(session)
-        
-        # Create production order
-        production_order = ProductionOrder(
-            order_number=order_number,
+        # CRITICAL: Perform stock analysis BEFORE creating the order
+        mrp_service = MRPAnalysisService(session)
+        stock_analysis = mrp_service.analyze_stock_availability(
             product_id=order_request.product_id,
             bom_id=order_request.bom_id,
-            warehouse_id=order_request.warehouse_id,
-            order_date=date.today(),
-            planned_start_date=order_request.planned_start_date,
-            planned_completion_date=order_request.planned_completion_date,
             planned_quantity=order_request.planned_quantity,
-            completed_quantity=Decimal('0'),
-            scrapped_quantity=Decimal('0'),
-            status='PLANNED',
-            priority=order_request.priority,
-            estimated_cost=Decimal('0'),
-            actual_cost=Decimal('0'),
-            notes=order_request.notes
+            warehouse_id=order_request.warehouse_id
         )
         
-        session.add(production_order)
-        session.flush()  # Get the ID
+        # VALIDATION RULES:
+        # 1. If raw materials are insufficient, BLOCK creation regardless of allow_partial_stock
+        if len(stock_analysis.raw_material_shortages) > 0:
+            shortage_details = [
+                f"{shortage.product_code} ({shortage.product_name}): need {shortage.shortage_quantity} units"
+                for shortage in stock_analysis.raw_material_shortages
+            ]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Cannot create production order: Raw materials insufficient",
+                    "message": "You must add stock for raw materials before creating this production order.",
+                    "shortage_type": "RAW_MATERIALS",
+                    "missing_materials": shortage_details,
+                    "can_create": False,
+                    "suggestion": "Please add stock for the missing raw materials and try again."
+                }
+            )
         
-        # Create components based on BOM
-        components = create_production_order_components(session, production_order, bom)
+        # 2. If only semi-finished products are missing, allow creation if allow_partial_stock=True
+        if len(stock_analysis.semi_finished_shortages) > 0 and not allow_partial_stock:
+            shortage_details = [
+                f"{shortage.product_code} ({shortage.product_name}): need {shortage.shortage_quantity} units"
+                for shortage in stock_analysis.semi_finished_shortages
+            ]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Semi-finished products insufficient",
+                    "message": "Missing semi-finished products can be produced. Use 'add missing semi-products' option.",
+                    "shortage_type": "SEMI_FINISHED",
+                    "missing_materials": shortage_details,
+                    "can_create": True,
+                    "suggestion": "Enable 'allow_partial_stock' to create with missing semi-finished products, or add dependent production orders."
+                }
+            )
         
-        # Calculate estimated cost (basic calculation)
-        estimated_cost = Decimal('0')
-        for component in components:
-            # Get average cost from inventory for this component
-            avg_cost = session.query(func.avg(InventoryItem.unit_cost)).filter(
-                and_(
-                    InventoryItem.product_id == component.component_product_id,
-                    InventoryItem.quantity_in_stock > 0
-                )
-            ).scalar() or Decimal('0')
+        # Create the production order using core business logic
+        production_order_id = _create_production_order_core(order_request, allow_partial_stock, session)
+        
+        # CRITICAL FIX: Reserve stock immediately after creating production order
+        # This is MANDATORY - if reservation fails, the order creation should fail
+        mrp_service = MRPAnalysisService(session)
+        reservations_created = []
+        
+        try:
+            # Reserve stock for all components - this is mandatory for order creation
+            reservations_created = mrp_service.reserve_stock_for_production(
+                production_order_id, "SYSTEM"  # In real implementation, use current_user.username
+            )
+            print(f"DEBUG: Successfully created {len(reservations_created)} stock reservations")
             
-            component.unit_cost = avg_cost
-            estimated_cost += Decimal(str(avg_cost)) * component.required_quantity
+            # Update component allocation status after successful reservation
+            if reservations_created:
+                # Get updated components to check allocation status
+                updated_components = session.query(ProductionOrderComponent).filter(
+                    ProductionOrderComponent.production_order_id == production_order_id
+                ).all()
+                
+                allocated_count = sum(1 for comp in updated_components if comp.allocation_status == 'FULLY_ALLOCATED')
+                print(f"DEBUG: {allocated_count}/{len(updated_components)} components are now fully allocated")
+                
+        except Exception as reservation_error:
+            # CRITICAL CHANGE: If stock reservation fails, the entire order creation should fail
+            session.rollback()
+            error_msg = f"Failed to reserve stock for production order: {str(reservation_error)}"
+            print(f"DEBUG: {error_msg}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Production order creation failed",
+                    "message": f"Could not reserve required stock: {str(reservation_error)}",
+                    "suggestion": "Check stock availability and try again.",
+                    "order_created": False
+                }
+            )
         
-        # Add labor and overhead costs from BOM
-        if bom.labor_cost_per_unit:
-            estimated_cost += Decimal(str(bom.labor_cost_per_unit)) * production_order.planned_quantity
-        
-        if bom.overhead_cost_per_unit:
-            estimated_cost += Decimal(str(bom.overhead_cost_per_unit)) * production_order.planned_quantity
-        
-        production_order.estimated_cost = estimated_cost
+        # Get the order number for the response message  
+        production_order = session.query(ProductionOrder).get(production_order_id)
+        order_number = production_order.order_number
         
         session.commit()
         
+        message = f"Production order {order_number} created successfully"
+        if len(stock_analysis.semi_finished_shortages) > 0:
+            message += f" (with {len(stock_analysis.semi_finished_shortages)} semi-finished product shortages)"
+        if len(reservations_created) > 0:
+            message += f" with {len(reservations_created)} stock reservations"
+        
         return IDResponse(
-            id=production_order.production_order_id,
-            message=f"Production order {order_number} created successfully"
+            id=production_order_id,
+            message=message
         )
         
     except Exception as e:
@@ -419,10 +726,18 @@ def create_production_order(
 def update_production_order(
     order_id: int = Path(..., description="Production order ID"),
     order_update: ProductionOrderUpdate = ...,
+    allow_partial_stock: bool = Query(False, description="Allow update with insufficient stock"),
     session: Session = Depends(get_db),
     # current_user: UserInfo = Depends(require_permissions("write:production"))  # Temporarily disabled for testing
 ):
-    """Update production order information."""
+    """
+    Update production order with stock validation for critical changes.
+    
+    Validates stock availability when critical fields are changed:
+    - product_id, bom_id, planned_quantity, warehouse_id
+    
+    Non-critical updates (notes, dates, priority) proceed without validation.
+    """
     # Get existing production order
     production_order = session.query(ProductionOrder).filter(
         ProductionOrder.production_order_id == order_id
@@ -438,12 +753,213 @@ def update_production_order(
             detail=f"Cannot update production order in {production_order.status} status"
         )
     
+    # Additional validation for critical updates on IN_PROGRESS orders
+    update_data = order_update.model_dump(exclude_unset=True)
+    critical_fields = {'product_id', 'bom_id', 'planned_quantity', 'warehouse_id'}
+    critical_changes = set(update_data.keys()).intersection(critical_fields)
+    
+    if production_order.status == 'IN_PROGRESS' and critical_changes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot modify critical fields ({', '.join(critical_changes)}) for production orders in IN_PROGRESS status. Only notes, dates, and priority can be updated."
+        )
+    
     try:
-        # Update fields that are provided
-        update_data = order_update.model_dump(exclude_unset=True)
+        # Define critical fields that require stock validation  
+        # (update_data already declared above for validation)
         
-        for field, value in update_data.items():
+        # Store original values for potential rollback
+        original_values = {}
+        for field in critical_fields:
             if hasattr(production_order, field):
+                original_values[field] = getattr(production_order, field)
+        
+        # If critical fields are being changed, perform stock validation
+        if critical_changes:
+            print(f"DEBUG: Critical fields being updated: {critical_changes}")
+            
+            # Validate new product and BOM if they're being changed
+            new_product_id = update_data.get('product_id', production_order.product_id)
+            new_bom_id = update_data.get('bom_id', production_order.bom_id)
+            new_warehouse_id = update_data.get('warehouse_id', production_order.warehouse_id)
+            new_planned_quantity = update_data.get('planned_quantity', production_order.planned_quantity)
+            
+            # Validate that new product and BOM are compatible if both are being changed
+            if 'product_id' in update_data or 'bom_id' in update_data:
+                try:
+                    validate_bom_and_product(session, new_product_id, new_bom_id)
+                except HTTPException as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid product/BOM combination: {e.detail}"
+                    )
+            
+            # Validate warehouse exists if it's being changed
+            if 'warehouse_id' in update_data:
+                warehouse = session.query(Warehouse).filter(
+                    Warehouse.warehouse_id == new_warehouse_id
+                ).first()
+                if not warehouse:
+                    raise NotFoundError("Warehouse", new_warehouse_id)
+            
+            # Initialize MRP service for stock analysis
+            mrp_service = MRPAnalysisService(session)
+            
+            # Release existing stock reservations before validation
+            print(f"DEBUG: Releasing existing reservations for order {order_id}")
+            try:
+                released_count = mrp_service.release_stock_reservations(order_id)
+                print(f"DEBUG: Released {released_count} existing reservations")
+            except Exception as e:
+                print(f"WARNING: Failed to release existing reservations: {str(e)}")
+            
+            # Perform stock analysis with new parameters
+            try:
+                stock_analysis = mrp_service.analyze_stock_availability(
+                    product_id=new_product_id,
+                    bom_id=new_bom_id,
+                    planned_quantity=new_planned_quantity,
+                    warehouse_id=new_warehouse_id,
+                    production_order_id=order_id
+                )
+                
+                # Apply same validation logic as creation endpoint
+                if len(stock_analysis.raw_material_shortages) > 0:
+                    shortage_details = [
+                        f"{shortage.product_code} ({shortage.product_name}): need {shortage.shortage_quantity} units"
+                        for shortage in stock_analysis.raw_material_shortages
+                    ]
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Cannot update production order: Raw materials insufficient",
+                            "message": "You must add stock for raw materials before making this update.",
+                            "shortage_type": "RAW_MATERIALS", 
+                            "missing_materials": shortage_details,
+                            "can_update": False,
+                            "suggestion": "Please add stock for the missing raw materials and try again."
+                        }
+                    )
+                
+                if len(stock_analysis.semi_finished_shortages) > 0 and not allow_partial_stock:
+                    shortage_details = [
+                        f"{shortage.product_code} ({shortage.product_name}): need {shortage.shortage_quantity} units"
+                        for shortage in stock_analysis.semi_finished_shortages
+                    ]
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": "Semi-finished products insufficient for update",
+                            "message": "Missing semi-finished products can be produced. Use 'allow partial stock' option.",
+                            "shortage_type": "SEMI_FINISHED",
+                            "missing_materials": shortage_details,
+                            "can_update": True,
+                            "suggestion": "Enable 'allow_partial_stock' to update with missing semi-finished products."
+                        }
+                    )
+                
+                print(f"DEBUG: Stock validation passed for updated production plan")
+                
+            except HTTPException:
+                # Re-raise HTTP exceptions (validation errors)
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to validate stock for updated production plan: {str(e)}"
+                )
+            
+            # Update production order components if product/BOM/quantity changed
+            if 'product_id' in update_data or 'bom_id' in update_data or 'planned_quantity' in update_data:
+                print(f"DEBUG: Updating production order components due to critical field changes")
+                
+                # Only proceed if the order isn't in production to avoid data consistency issues
+                if production_order.status in ['IN_PROGRESS']:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cannot change product, BOM, or quantity for production orders that are in progress"
+                    )
+                
+                # Delete existing components
+                deleted_components = session.query(ProductionOrderComponent).filter(
+                    ProductionOrderComponent.production_order_id == order_id
+                ).count()
+                
+                session.query(ProductionOrderComponent).filter(
+                    ProductionOrderComponent.production_order_id == order_id
+                ).delete()
+                
+                print(f"DEBUG: Deleted {deleted_components} existing components")
+                
+                # Apply the updates to the production order first
+                for field, value in update_data.items():
+                    if hasattr(production_order, field):
+                        setattr(production_order, field, value)
+                
+                session.flush()  # Ensure changes are visible
+                
+                # Create new components based on updated BOM
+                bom = session.query(BillOfMaterials).get(new_bom_id)
+                if not bom:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"BOM with ID {new_bom_id} not found"
+                    )
+                
+                new_components = create_production_order_components(session, production_order, bom)
+                print(f"DEBUG: Created {len(new_components)} new components")
+                
+                # Recalculate estimated cost
+                estimated_cost = Decimal('0')
+                for component in new_components:
+                    avg_cost = session.query(func.avg(InventoryItem.unit_cost)).filter(
+                        and_(
+                            InventoryItem.product_id == component.component_product_id,
+                            InventoryItem.quantity_in_stock > 0
+                        )
+                    ).scalar() or Decimal('0')
+                    
+                    component.unit_cost = avg_cost
+                    estimated_cost += Decimal(str(avg_cost)) * component.required_quantity
+                
+                # Add labor and overhead costs from BOM
+                if bom.labor_cost_per_unit:
+                    estimated_cost += Decimal(str(bom.labor_cost_per_unit)) * production_order.planned_quantity
+                if bom.overhead_cost_per_unit:
+                    estimated_cost += Decimal(str(bom.overhead_cost_per_unit)) * production_order.planned_quantity
+                
+                production_order.estimated_cost = estimated_cost
+                print(f"DEBUG: Updated estimated cost to {estimated_cost}")
+            
+            else:
+                # Apply critical field updates that don't affect components (e.g., warehouse_id only)
+                for field, value in update_data.items():
+                    if field in critical_fields and hasattr(production_order, field):
+                        setattr(production_order, field, value)
+                        print(f"DEBUG: Updated {field} to {value}")
+            
+            # Reserve stock for the updated production plan
+            try:
+                print(f"DEBUG: Creating new stock reservations for updated production plan")
+                reservations_created = mrp_service.reserve_stock_for_production(
+                    order_id, "SYSTEM"  # In real implementation, use current_user.username
+                )
+                print(f"DEBUG: Successfully created {len(reservations_created)} new stock reservations")
+                
+            except Exception as reservation_error:
+                print(f"WARNING: Failed to reserve stock after update: {str(reservation_error)}")
+                # For updates, we'll proceed but add a warning note
+                current_notes = production_order.notes or ""
+                warning_note = f"\n[WARNING] Stock reservation failed after update: {str(reservation_error)}"
+                production_order.notes = current_notes + warning_note
+        
+        else:
+            # No critical fields changed - simple update without validation
+            print(f"DEBUG: Non-critical fields update: {set(update_data.keys())}")
+        
+        # Apply remaining updates that weren't handled in the critical section
+        for field, value in update_data.items():
+            if hasattr(production_order, field) and field not in critical_fields:
                 setattr(production_order, field, value)
         
         production_order.updated_at = datetime.now()
@@ -455,6 +971,8 @@ def update_production_order(
         
     except Exception as e:
         session.rollback()
+        if isinstance(e, (NotFoundError, HTTPException)):
+            raise e
         raise HTTPException(status_code=500, detail=f"Failed to update production order: {str(e)}")
 
 
@@ -464,7 +982,13 @@ def delete_production_order(
     session: Session = Depends(get_db),
     # current_user: UserInfo = Depends(require_permissions("delete:production"))  # Temporarily disabled for testing
 ):
-    """Delete production order with stock reservation cleanup."""
+    """
+    Delete production order with stock reservation cleanup.
+    
+    Allows deletion (cancellation) of PLANNED and IN_PROGRESS orders.
+    Prevents deletion of COMPLETED orders since production has already been done.
+    Automatically releases associated stock reservations.
+    """
     # Get production order
     production_order = session.query(ProductionOrder).filter(
         ProductionOrder.production_order_id == order_id
@@ -473,11 +997,11 @@ def delete_production_order(
     if not production_order:
         raise NotFoundError("Production Order", order_id)
     
-    # Check if order can be deleted (only PLANNED orders can be deleted)
-    if production_order.status not in ['PLANNED', 'CANCELLED']:
+    # Check if order can be deleted (PLANNED and IN_PROGRESS can be cancelled, but COMPLETED cannot)
+    if production_order.status == 'COMPLETED':
         raise HTTPException(
             status_code=400,
-            detail=f"Cannot delete production order in {production_order.status} status"
+            detail=f"Cannot delete completed production order - production has already been completed and cannot be undone"
         )
     
     try:
@@ -867,14 +1391,32 @@ def create_production_order_with_analysis(
             warehouse_id=order_request.warehouse_id
         )
         
-        # Create the main production order
-        main_order_response = create_production_order(order_request, session)
-        main_order_id = main_order_response.id
+        # Create the main production order directly
+        main_order_id = _create_production_order_core(order_request, False, session)
+        main_order_response = IDResponse(id=main_order_id, message="Production order created successfully")
         
         dependent_orders = []
         nested_orders_created = []  # Frontend expects this
         production_tree = None
         warnings = []  # Frontend expects this
+        
+        # CRITICAL VALIDATION: Check for raw material shortages first
+        if len(analysis_result.raw_material_shortages) > 0:
+            shortage_details = [
+                f"{shortage.product_code} ({shortage.product_name}): need {shortage.shortage_quantity} units"
+                for shortage in analysis_result.raw_material_shortages
+            ]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Cannot create production order: Raw materials insufficient",
+                    "message": "You must add stock for raw materials before creating this production order.",
+                    "shortage_type": "RAW_MATERIALS",
+                    "missing_materials": shortage_details,
+                    "can_create": False,
+                    "suggestion": "Please add stock for the missing raw materials and try again."
+                }
+            )
         
         # Add warnings for shortages
         if analysis_result.shortage_exists:
@@ -907,14 +1449,28 @@ def create_production_order_with_analysis(
                 "planned_quantity": float(order["planned_quantity"])
             } for order in dependent_orders]
         
-        # Try to reserve stock for the main production order
+        # CRITICAL FIX: Reserve stock for the main production order
         reservations = []
         try:
             reservations = mrp_service.reserve_stock_for_production(
                 main_order_id, "SYSTEM"
             )
-        except ValueError as e:
-            warnings.append(f"Stock reservation failed: {str(e)}")
+            print(f"DEBUG: Reserved stock for main order {main_order_id}: {len(reservations)} reservations")
+        except Exception as e:
+            # For the enhanced endpoint, we'll track failures but not block order creation
+            # since dependent orders may still provide the needed components
+            warnings.append(f"Stock reservation failed for main order: {str(e)}")
+        
+        # Also attempt to reserve stock for dependent orders
+        for dep_order in dependent_orders:
+            try:
+                dep_reservations = mrp_service.reserve_stock_for_production(
+                    dep_order["production_order_id"], "SYSTEM"
+                )
+                reservations.extend(dep_reservations)
+                print(f"DEBUG: Reserved stock for dependent order {dep_order['order_number']}: {len(dep_reservations)} reservations")
+            except Exception as e:
+                warnings.append(f"Stock reservation failed for dependent order {dep_order['order_number']}: {str(e)}")
         
         session.commit()
         
@@ -1041,6 +1597,26 @@ def analyze_stock_availability(
                 }
                 analysis_items.append(item)
         
+        # Provide specific guidance based on shortage type
+        production_guidance = {
+            "can_create_order": len(analysis_result.raw_material_shortages) == 0,
+            "can_create_with_dependencies": len(analysis_result.raw_material_shortages) == 0 and len(analysis_result.semi_finished_shortages) > 0,
+            "must_add_stock": len(analysis_result.raw_material_shortages) > 0,
+            "shortage_summary": {
+                "raw_materials": len(analysis_result.raw_material_shortages),
+                "semi_finished": len(analysis_result.semi_finished_shortages),
+                "total_shortages": len(missing_materials)
+            },
+            "recommendations": []
+        }
+        
+        if len(analysis_result.raw_material_shortages) > 0:
+            production_guidance["recommendations"].append("Add stock for raw materials before creating production order")
+        elif len(analysis_result.semi_finished_shortages) > 0:
+            production_guidance["recommendations"].append("Enable 'add missing semi-products' to create dependent production orders")
+        else:
+            production_guidance["recommendations"].append("All materials available - can create production order immediately")
+        
         return {
             "bom_id": request.bom_id,
             "bom_name": bom.bom_name,
@@ -1051,6 +1627,7 @@ def analyze_stock_availability(
             "can_produce": analysis_result.can_produce,
             "missing_materials": missing_materials,
             "total_material_cost": float(analysis_result.total_estimated_cost),
+            "production_guidance": production_guidance,
             "analysis_date": datetime.now().isoformat()
         }
         
@@ -1471,6 +2048,192 @@ def get_production_dependency_tree(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get production tree: {str(e)}")
+
+
+@router.get("/reservations/all", response_model=Dict)
+def get_all_stock_reservations(
+    status: Optional[str] = Query(None, description="Filter by reservation status"),
+    product_id: Optional[int] = Query(None, description="Filter by product ID"),
+    warehouse_id: Optional[int] = Query(None, description="Filter by warehouse ID"),
+    production_order_id: Optional[int] = Query(None, description="Filter by production order ID"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    session: Session = Depends(get_db),
+    # current_user: UserInfo = Depends(require_permissions("read:production"))  # Temporarily disabled for testing
+):
+    """
+    Get all stock reservations with filtering and pagination.
+    
+    Returns comprehensive reservation data across all production orders.
+    """
+    try:
+        # Build base query
+        query = session.query(StockReservation).filter(
+            StockReservation.reserved_for_type == 'PRODUCTION_ORDER'
+        )
+        
+        # Apply filters
+        if status:
+            query = query.filter(StockReservation.status == status)
+        if product_id:
+            query = query.filter(StockReservation.product_id == product_id)
+        if warehouse_id:
+            query = query.filter(StockReservation.warehouse_id == warehouse_id)
+        if production_order_id:
+            query = query.filter(StockReservation.reserved_for_id == production_order_id)
+        
+        # Get total count
+        total_count = query.count()
+        
+        # Apply pagination and ordering
+        reservations = query.order_by(desc(StockReservation.reservation_date)).offset(
+            pagination.offset
+        ).limit(pagination.page_size).all()
+        
+        # Build response with product and warehouse details
+        reservation_details = []
+        for res in reservations:
+            # Get product details
+            product = session.query(Product).get(res.product_id)
+            warehouse = session.query(Warehouse).get(res.warehouse_id)
+            production_order = session.query(ProductionOrder).get(res.reserved_for_id)
+            
+            reservation_details.append({
+                'reservation_id': res.reservation_id,
+                'product': {
+                    'product_id': product.product_id,
+                    'product_code': product.product_code,
+                    'product_name': product.product_name,
+                    'product_type': product.product_type
+                } if product else None,
+                'warehouse': {
+                    'warehouse_id': warehouse.warehouse_id,
+                    'warehouse_code': warehouse.warehouse_code,
+                    'warehouse_name': warehouse.warehouse_name
+                } if warehouse else None,
+                'production_order': {
+                    'production_order_id': production_order.production_order_id,
+                    'order_number': production_order.order_number,
+                    'status': production_order.status
+                } if production_order else None,
+                'reserved_quantity': float(res.reserved_quantity),
+                'status': res.status,
+                'reservation_date': res.reservation_date.isoformat() if res.reservation_date else None,
+                'expiry_date': res.expiry_date.isoformat() if res.expiry_date else None,
+                'reserved_by': res.reserved_by,
+                'notes': res.notes
+            })
+        
+        # Calculate pagination info
+        total_pages = (total_count + pagination.page_size - 1) // pagination.page_size
+        
+        return {
+            'reservations': reservation_details,
+            'pagination': {
+                'total_count': total_count,
+                'page': pagination.page,
+                'page_size': pagination.page_size,
+                'total_pages': total_pages,
+                'has_next': pagination.page < total_pages,
+                'has_previous': pagination.page > 1
+            },
+            'summary': {
+                'total_reservations': total_count,
+                'active_reservations': len([r for r in reservations if r.status == 'ACTIVE']),
+                'consumed_reservations': len([r for r in reservations if r.status == 'CONSUMED']),
+                'released_reservations': len([r for r in reservations if r.status == 'RELEASED'])
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get reservations: {str(e)}")
+
+
+@router.get("/component-allocation-status", response_model=Dict)
+def get_component_allocation_status(
+    status: Optional[str] = Query(None, description="Filter by allocation status"),
+    product_id: Optional[int] = Query(None, description="Filter by component product ID"),
+    pagination: PaginationParams = Depends(get_pagination_params),
+    session: Session = Depends(get_db),
+    # current_user: UserInfo = Depends(require_permissions("read:production"))  # Temporarily disabled for testing
+):
+    """
+    Get component allocation status across all production orders.
+    
+    Returns detailed view of component allocation status for monitoring purposes.
+    """
+    try:
+        # Build base query
+        query = session.query(ProductionOrderComponent).options(
+            joinedload(ProductionOrderComponent.component_product),
+            joinedload(ProductionOrderComponent.production_order)
+        )
+        
+        # Apply filters
+        if status:
+            query = query.filter(ProductionOrderComponent.allocation_status == status)
+        if product_id:
+            query = query.filter(ProductionOrderComponent.component_product_id == product_id)
+        
+        # Get total count
+        total_count = query.count()
+        
+        # Apply pagination and ordering
+        components = query.order_by(
+            desc(ProductionOrderComponent.production_order_id)
+        ).offset(pagination.offset).limit(pagination.page_size).all()
+        
+        # Build response
+        component_details = []
+        status_summary = {'NOT_ALLOCATED': 0, 'PARTIALLY_ALLOCATED': 0, 'FULLY_ALLOCATED': 0, 'CONSUMED': 0}
+        
+        for comp in components:
+            status_summary[comp.allocation_status] = status_summary.get(comp.allocation_status, 0) + 1
+            
+            component_details.append({
+                'po_component_id': comp.po_component_id,
+                'production_order': {
+                    'production_order_id': comp.production_order.production_order_id,
+                    'order_number': comp.production_order.order_number,
+                    'status': comp.production_order.status,
+                    'planned_quantity': float(comp.production_order.planned_quantity)
+                } if comp.production_order else None,
+                'component_product': {
+                    'product_id': comp.component_product.product_id,
+                    'product_code': comp.component_product.product_code,
+                    'product_name': comp.component_product.product_name,
+                    'product_type': comp.component_product.product_type
+                } if comp.component_product else None,
+                'required_quantity': float(comp.required_quantity),
+                'allocated_quantity': float(comp.allocated_quantity),
+                'consumed_quantity': float(comp.consumed_quantity),
+                'unit_cost': float(comp.unit_cost),
+                'allocation_status': comp.allocation_status,
+                'allocation_percentage': float((comp.allocated_quantity / comp.required_quantity) * 100) if comp.required_quantity > 0 else 0
+            })
+        
+        # Calculate pagination info
+        total_pages = (total_count + pagination.page_size - 1) // pagination.page_size
+        
+        return {
+            'components': component_details,
+            'pagination': {
+                'total_count': total_count,
+                'page': pagination.page,
+                'page_size': pagination.page_size,
+                'total_pages': total_pages,
+                'has_next': pagination.page < total_pages,
+                'has_previous': pagination.page > 1
+            },
+            'allocation_summary': status_summary,
+            'allocation_statistics': {
+                'total_components': total_count,
+                'fully_allocated_percentage': round((status_summary['FULLY_ALLOCATED'] / total_count) * 100, 2) if total_count > 0 else 0,
+                'not_allocated_percentage': round((status_summary['NOT_ALLOCATED'] / total_count) * 100, 2) if total_count > 0 else 0
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get component allocation status: {str(e)}")
 
 
 def _create_dependent_orders(production_tree: ProductionPlanNode, session: Session, parent_order_id: int) -> List[Dict]:
