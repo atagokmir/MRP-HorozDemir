@@ -27,10 +27,15 @@ class Settings(BaseSettings):
     # CORS Configuration
     ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000",
+        "http://localhost:3001",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
         "https://localhost:3000",
+        "https://localhost:3001",
         "http://192.168.1.172:3000",
-        "https://192.168.1.172:3000"
+        "http://192.168.1.172:3001",
+        "https://192.168.1.172:3000",
+        "https://192.168.1.172:3001"
     ]
     
     # Allow local network access in development

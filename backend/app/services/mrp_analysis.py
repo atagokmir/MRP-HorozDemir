@@ -12,7 +12,7 @@ from sqlalchemy import and_, func, desc
 
 from models.production import ProductionOrder, ProductionOrderComponent, StockReservation, ProductionDependency
 from models.bom import BillOfMaterials, BomComponent
-from models.inventory import InventoryItem
+from models.inventory import InventoryItem, StockMovement
 from models.master_data import Product, Warehouse
 
 
@@ -938,6 +938,9 @@ class MRPAnalysisService:
         Consume reserved stock for a production order using FIFO principles.
         This method is called when production order status changes to COMPLETED.
         
+        CRITICAL FIX: Now properly consumes from reserved quantities and reduces
+        reserved_quantity instead of quantity_in_stock directly.
+        
         Args:
             production_order_id: ID of the production order
             
@@ -965,14 +968,16 @@ class MRPAnalysisService:
             # Track this component for status update
             component_products_consumed.add(reservation.product_id)
             
-            # Find inventory items to consume from in FIFO order
+            # FIXED: Find inventory items that have reserved quantity for this reservation
+            # We need to consume from items that actually have reservations, in FIFO order
             inventory_items = self.session.query(InventoryItem).filter(
                 and_(
                     InventoryItem.product_id == reservation.product_id,
                     InventoryItem.warehouse_id == reservation.warehouse_id,
-                    InventoryItem.quantity_in_stock > 0
+                    InventoryItem.reserved_quantity > 0,  # Only items with reservations
+                    InventoryItem.quantity_in_stock > 0   # That still have stock
                 )
-            ).order_by(InventoryItem.entry_date).all()
+            ).order_by(InventoryItem.entry_date).all()  # FIFO order
             
             remaining_to_consume = reservation.reserved_quantity
             
@@ -980,10 +985,16 @@ class MRPAnalysisService:
                 if remaining_to_consume <= 0:
                     break
                 
-                # Calculate how much we can consume from this batch
-                consume_qty = min(remaining_to_consume, item.quantity_in_stock)
+                # FIXED: Calculate how much we can consume from this batch's reserved quantity
+                # We can only consume up to what's reserved in this item
+                consume_qty = min(remaining_to_consume, item.reserved_quantity)
                 
-                # Update inventory item quantities (FIFO consumption)
+                if consume_qty <= 0:
+                    continue
+                
+                # FIXED: Properly update inventory quantities
+                # Reduce both reserved quantity and total stock
+                item.reserved_quantity -= consume_qty
                 item.quantity_in_stock -= consume_qty
                 
                 # Record consumption for audit trail
@@ -1005,30 +1016,123 @@ class MRPAnalysisService:
             if remaining_to_consume > 0:
                 raise ValueError(
                     f"Could not fully consume reservation for product {reservation.product_id}. "
-                    f"Missing quantity: {remaining_to_consume}"
+                    f"Missing reserved quantity: {remaining_to_consume}. "
+                    f"This indicates a synchronization issue between reservations and inventory."
                 )
             
             # Mark reservation as consumed
             reservation.consume_reservation()
-            
-            # SYNCHRONIZATION FIX: Update inventory reserved quantities after consuming
-            # Find any inventory item from this product/warehouse to trigger sync
-            sample_item = self.session.query(InventoryItem).filter(
-                and_(
-                    InventoryItem.product_id == reservation.product_id,
-                    InventoryItem.warehouse_id == reservation.warehouse_id,
-                    InventoryItem.quality_status == 'APPROVED'
-                )
-            ).first()
-            
-            if sample_item:
-                self._sync_inventory_reserved_quantity(sample_item.inventory_item_id)
         
         # Update component status to CONSUMED
         for component_product_id in component_products_consumed:
             self._update_component_status_to_consumed(production_order_id, component_product_id)
         
         return consumption_records
+    
+    def create_finished_goods_inventory(
+        self,
+        production_order_id: int,
+        completed_quantity: Decimal,
+        consumption_records: List[Dict]
+    ) -> Dict:
+        """
+        Create finished goods inventory entry after production completion.
+        
+        Args:
+            production_order_id: ID of the completed production order
+            completed_quantity: Quantity of finished goods produced
+            consumption_records: Records from consume_stock_for_production for cost calculation
+            
+        Returns:
+            Dictionary with created inventory item details
+        """
+        # Get production order details
+        production_order = self.session.query(ProductionOrder).get(production_order_id)
+        if not production_order:
+            raise ValueError(f"Production order {production_order_id} not found")
+        
+        # Calculate total material cost from consumption records
+        total_material_cost = sum(record['total_cost'] for record in consumption_records)
+        
+        # Calculate unit cost (material cost per unit produced)
+        if completed_quantity > 0:
+            unit_cost = total_material_cost / completed_quantity
+        else:
+            raise ValueError("Cannot create finished goods with zero completed quantity")
+        
+        # Determine appropriate warehouse based on product type
+        product = self.session.query(Product).get(production_order.product_id)
+        if not product:
+            raise ValueError(f"Product {production_order.product_id} not found")
+        
+        # Find appropriate warehouse - prefer Finished Products, fallback to Semi-Finished
+        finished_warehouse = self.session.query(Warehouse).filter(
+            Warehouse.warehouse_type == 'FINISHED_PRODUCTS'
+        ).first()
+        
+        semi_finished_warehouse = self.session.query(Warehouse).filter(
+            Warehouse.warehouse_type == 'SEMI_FINISHED_PRODUCTS'
+        ).first()
+        
+        # Choose warehouse based on product type or available warehouses
+        if product.product_type == 'FINISHED' and finished_warehouse:
+            target_warehouse = finished_warehouse
+        elif product.product_type in ['SEMI_FINISHED', 'INTERMEDIATE'] and semi_finished_warehouse:
+            target_warehouse = semi_finished_warehouse
+        elif finished_warehouse:
+            target_warehouse = finished_warehouse  # Default fallback
+        elif semi_finished_warehouse:
+            target_warehouse = semi_finished_warehouse  # Secondary fallback
+        else:
+            raise ValueError("No suitable warehouse found for finished goods")
+        
+        # Generate batch number for finished goods
+        batch_number = f"PRD-{production_order.order_number}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        
+        # Create inventory entry for finished goods
+        finished_goods_item = InventoryItem(
+            product_id=production_order.product_id,
+            warehouse_id=target_warehouse.warehouse_id,
+            batch_number=batch_number,
+            entry_date=datetime.now(),
+            quantity_in_stock=completed_quantity,
+            reserved_quantity=Decimal('0'),
+            unit_cost=unit_cost,
+            supplier_id=None,  # Internal production
+            purchase_order_id=None,  # Not from purchase
+            location_in_warehouse=f"PROD-{production_order.order_number}",
+            quality_status='APPROVED',  # Assume production is quality approved
+            notes=f"Produced from production order {production_order.order_number}. Material cost: {total_material_cost}"
+        )
+        
+        self.session.add(finished_goods_item)
+        self.session.flush()  # Get the ID
+        
+        # Create stock movement record for the addition
+        stock_movement = StockMovement(
+            inventory_item_id=finished_goods_item.inventory_item_id,
+            movement_type='PRODUCTION',
+            quantity=completed_quantity,
+            unit_cost=unit_cost,
+            reference_type='PRODUCTION_ORDER',
+            reference_id=production_order_id,
+            created_by='SYSTEM',  # System generated
+            notes=f"Finished goods from production order {production_order.order_number}"
+        )
+        
+        self.session.add(stock_movement)
+        
+        return {
+            'inventory_item_id': finished_goods_item.inventory_item_id,
+            'product_id': production_order.product_id,
+            'warehouse_id': target_warehouse.warehouse_id,
+            'warehouse_name': target_warehouse.warehouse_name,
+            'batch_number': batch_number,
+            'quantity': completed_quantity,
+            'unit_cost': unit_cost,
+            'total_cost': total_material_cost,
+            'entry_date': finished_goods_item.entry_date
+        }
     
     def adjust_stock_reservations_for_quantity_change(
         self,

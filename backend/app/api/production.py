@@ -1258,12 +1258,20 @@ def complete_production_order(
         
         production_order.updated_at = datetime.now()
         
-        # TODO: Implement FIFO stock consumption and finished goods creation
-        # This would involve:
+        # IMPLEMENTED: FIFO stock consumption and finished goods creation
+        mrp_service = MRPAnalysisService(session)
+        
         # 1. Consume allocated stock using FIFO
-        # 2. Create finished goods inventory
-        # 3. Calculate actual costs
-        # 4. Update component consumption records
+        consumption_records = mrp_service.consume_stock_for_production(order_id)
+        
+        # 2. Create finished goods inventory if we completed any quantity
+        finished_goods_record = None
+        if completion_data.completed_quantity > 0:
+            finished_goods_record = mrp_service.create_finished_goods_inventory(
+                order_id,
+                completion_data.completed_quantity,
+                consumption_records
+            )
         
         session.commit()
         
