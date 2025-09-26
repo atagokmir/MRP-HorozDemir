@@ -947,6 +947,9 @@ class MRPAnalysisService:
         Returns:
             List of consumption records
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Get all active reservations for this production order
         reservations = self.session.query(StockReservation).filter(
             and_(
@@ -956,7 +959,12 @@ class MRPAnalysisService:
             )
         ).all()
         
+        logger.info(f"📦 FIFO CONSUMPTION: Found {len(reservations)} active reservations for order {production_order_id}")
+        for i, res in enumerate(reservations):
+            logger.info(f"  📋 Reservation {i+1}: Product {res.product_id}, Warehouse {res.warehouse_id}, Qty: {res.reserved_quantity}")
+        
         if not reservations:
+            logger.error(f"❌ FIFO CONSUMPTION: No active stock reservations found for production order {production_order_id}")
             raise ValueError(f"No active stock reservations found for production order {production_order_id}")
         
         consumption_records = []
@@ -965,6 +973,8 @@ class MRPAnalysisService:
         component_products_consumed = set()
         
         for reservation in reservations:
+            logger.info(f"🔄 Processing reservation for Product {reservation.product_id}, Warehouse {reservation.warehouse_id}")
+            
             # Track this component for status update
             component_products_consumed.add(reservation.product_id)
             
@@ -979,7 +989,12 @@ class MRPAnalysisService:
                 )
             ).order_by(InventoryItem.entry_date).all()  # FIFO order
             
+            logger.info(f"  📦 Found {len(inventory_items)} inventory batches with reservations")
+            for i, item in enumerate(inventory_items):
+                logger.info(f"    🏷️ Batch {i+1}: ID {item.inventory_item_id}, Entry: {item.entry_date}, Stock: {item.quantity_in_stock}, Reserved: {item.reserved_quantity}")
+            
             remaining_to_consume = reservation.reserved_quantity
+            logger.info(f"  🎯 Need to consume: {remaining_to_consume}")
             
             for item in inventory_items:
                 if remaining_to_consume <= 0:
@@ -992,10 +1007,18 @@ class MRPAnalysisService:
                 if consume_qty <= 0:
                     continue
                 
+                logger.info(f"    ✂️ Consuming {consume_qty} from batch {item.inventory_item_id} (Stock: {item.quantity_in_stock}, Reserved: {item.reserved_quantity})")
+                
+                # Store before values for logging
+                before_stock = item.quantity_in_stock
+                before_reserved = item.reserved_quantity
+                
                 # FIXED: Properly update inventory quantities
                 # Reduce both reserved quantity and total stock
                 item.reserved_quantity -= consume_qty
                 item.quantity_in_stock -= consume_qty
+                
+                logger.info(f"    ✅ Updated batch {item.inventory_item_id}: Stock {before_stock}→{item.quantity_in_stock}, Reserved {before_reserved}→{item.reserved_quantity}")
                 
                 # Record consumption for audit trail
                 consumption_record = {
@@ -1012,6 +1035,7 @@ class MRPAnalysisService:
                 consumption_records.append(consumption_record)
                 
                 remaining_to_consume -= consume_qty
+                logger.info(f"    📉 Remaining to consume: {remaining_to_consume}")
             
             if remaining_to_consume > 0:
                 raise ValueError(

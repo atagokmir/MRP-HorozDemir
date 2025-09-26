@@ -98,7 +98,8 @@ def get_warehouse(
 
 
 @router.post("/warehouses")  # TODO: response_model=IDResponse)
-def create_warehouse(
+async def create_warehouse(
+    request: Request,
     warehouse_create: WarehouseCreate,
     session: Session = Depends(get_db),
     current_user: UserInfo = require_permissions("write:warehouses")
@@ -106,31 +107,53 @@ def create_warehouse(
     """
     Create new warehouse.
     
-    - **warehouse_code**: Unique warehouse code (2-10 chars)
+    - **warehouse_code**: Unique warehouse code (2-20 chars)
     - **warehouse_name**: Warehouse name
     - **warehouse_type**: Type (RAW_MATERIALS, SEMI_FINISHED, FINISHED_PRODUCTS, PACKAGING)
     - **location**: Physical location (optional)
     - **manager_name**: Manager name (optional)
     """
-    # Check for duplicate warehouse code
-    query = select(WarehouseModel).where(
-        WarehouseModel.warehouse_code == warehouse_create.warehouse_code.upper()
-    )
-    result = session.execute(query)
-    if result.scalar_one_or_none():
-        raise ConflictError(f"Warehouse code '{warehouse_create.warehouse_code}' already exists")
+    import logging
+    logger = logging.getLogger(__name__)
     
-    warehouse = warehouse_service.create(
-        session, 
-        warehouse_create.dict(),
-        current_user.user_id
-    )
-    session.commit()
-    
-    return IDResponse(
-        id=warehouse.warehouse_id,
-        message=f"Warehouse '{warehouse.warehouse_name}' created successfully"
-    )
+    try:
+        # Log the raw request body for debugging
+        raw_body = await request.body()
+        logger.info(f"Warehouse creation request - Raw body: {raw_body.decode('utf-8')}")
+        logger.info(f"Warehouse creation request - Headers: {dict(request.headers)}")
+        logger.info(f"Warehouse creation request - Content-Type: {request.headers.get('content-type')}")
+        
+        # Log the parsed request object
+        logger.info(f"Warehouse creation request - Parsed WarehouseCreate object: {warehouse_create.dict()}")
+        logger.info(f"Warehouse creation request - Warehouse type value: {warehouse_create.warehouse_type}")
+        logger.info(f"Warehouse creation request - Warehouse type type: {type(warehouse_create.warehouse_type)}")
+        
+        # Check for duplicate warehouse code
+        query = select(WarehouseModel).where(
+            WarehouseModel.warehouse_code == warehouse_create.warehouse_code.upper()
+        )
+        result = session.execute(query)
+        if result.scalar_one_or_none():
+            raise ConflictError(f"Warehouse code '{warehouse_create.warehouse_code}' already exists")
+        
+        warehouse = warehouse_service.create(
+            session, 
+            warehouse_create.dict(),
+            current_user.user_id
+        )
+        session.commit()
+        
+        logger.info(f"Warehouse created successfully - ID: {warehouse.warehouse_id}, Name: {warehouse.warehouse_name}")
+        
+        return IDResponse(
+            id=warehouse.warehouse_id,
+            message=f"Warehouse '{warehouse.warehouse_name}' created successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Warehouse creation failed: {str(e)}")
+        logger.error(f"Exception type: {type(e)}")
+        raise
 
 
 @router.put("/warehouses/{warehouse_id}")  # TODO: response_model=Warehouse)

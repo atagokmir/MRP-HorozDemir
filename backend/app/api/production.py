@@ -6,6 +6,7 @@ Handles production order lifecycle, component allocation, and completion process
 from typing import List, Optional, Dict, Set
 from decimal import Decimal
 from datetime import date, datetime
+import logging
 from fastapi import APIRouter, Depends, Query, Path, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, func, desc
@@ -1053,6 +1054,7 @@ def update_production_order_status(
         raise NotFoundError("Production Order", order_id)
     
     try:
+        logger = logging.getLogger(__name__)
         new_status = status_update.status.value
         old_status = production_order.status
         
@@ -1080,6 +1082,20 @@ def update_production_order_status(
             # Consume reserved stock using FIFO
             try:
                 consumption_records = mrp_service.consume_stock_for_production(order_id)
+                logger.info(f"🔨 FINISHED GOODS DEBUG: consumption_records={len(consumption_records) if consumption_records else 0}, planned_quantity={production_order.planned_quantity}")
+                
+                # Create finished goods inventory (assume full completion of planned quantity)
+                if consumption_records and production_order.planned_quantity > 0:
+                    logger.info(f"🔨 FINISHED GOODS: Creating finished goods for {production_order.planned_quantity} units")
+                    finished_goods = mrp_service.create_finished_goods_inventory(
+                        order_id,
+                        production_order.planned_quantity,
+                        consumption_records
+                    )
+                    logger.info(f"✅ FINISHED GOODS: Created finished goods result: {finished_goods}")
+                    production_order.completed_quantity = production_order.planned_quantity
+                else:
+                    logger.warning(f"⚠️ FINISHED GOODS: Skipping creation - consumption_records={len(consumption_records) if consumption_records else 0}, planned_quantity={production_order.planned_quantity}")
                 
                 # Add consumption note
                 consumption_summary = f"Consumed {len(consumption_records)} stock batches"
@@ -1261,17 +1277,31 @@ def complete_production_order(
         # IMPLEMENTED: FIFO stock consumption and finished goods creation
         mrp_service = MRPAnalysisService(session)
         
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"🏭 PRODUCTION COMPLETION: Starting completion for order {order_id}")
+        logger.info(f"📊 Completed quantity: {completion_data.completed_quantity}, Scrapped: {completion_data.scrapped_quantity}")
+        
         # 1. Consume allocated stock using FIFO
+        logger.info(f"📦 STOCK CONSUMPTION: Starting FIFO consumption for order {order_id}")
         consumption_records = mrp_service.consume_stock_for_production(order_id)
+        logger.info(f"✅ STOCK CONSUMPTION: Consumed {len(consumption_records)} stock records")
         
         # 2. Create finished goods inventory if we completed any quantity
         finished_goods_record = None
         if completion_data.completed_quantity > 0:
+            logger.info(f"🔨 FINISHED GOODS: Creating finished goods inventory for quantity {completion_data.completed_quantity}")
             finished_goods_record = mrp_service.create_finished_goods_inventory(
                 order_id,
                 completion_data.completed_quantity,
                 consumption_records
             )
+            if finished_goods_record:
+                logger.info(f"✅ FINISHED GOODS: Created inventory record - Quantity: {finished_goods_record.get('quantity', 'N/A')}, Cost: {finished_goods_record.get('unit_cost', 'N/A')}")
+            else:
+                logger.warning(f"⚠️ FINISHED GOODS: No inventory record created")
+        
+        logger.info(f"🎉 PRODUCTION COMPLETION: Successfully completed order {order_id}")
         
         session.commit()
         

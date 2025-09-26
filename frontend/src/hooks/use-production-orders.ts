@@ -95,6 +95,41 @@ export function useUpdateProductionOrder() {
   });
 }
 
+export function useCompleteProductionOrder() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ 
+      id, 
+      completedQuantity, 
+      scrappedQuantity = 0, 
+      notes 
+    }: { 
+      id: number; 
+      completedQuantity: number; 
+      scrappedQuantity?: number; 
+      notes?: string; 
+    }) => {
+      const response = await apiClient.post<ProductionOrder>(`/production-orders/${id}/complete`, {
+        completed_quantity: completedQuantity,
+        scrapped_quantity: scrappedQuantity,
+        completion_notes: notes
+      });
+      return response.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['production-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['production-orders', data?.production_order_id || data?.id] });
+      // Invalidate all inventory-related queries since completion consumes stock and creates finished goods
+      queryClient.invalidateQueries({ queryKey: ['inventory-items'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-availability'] });
+      queryClient.invalidateQueries({ queryKey: ['critical-stock'] });
+      // Invalidate reservations since they will be consumed
+      queryClient.invalidateQueries({ queryKey: ['production-orders', data?.production_order_id || data?.id, 'reservations'] });
+    },
+  });
+}
+
 export function useDeleteProductionOrder() {
   const queryClient = useQueryClient();
 

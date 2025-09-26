@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useProductionOrders, useCreateProductionOrder, useCreateMultipleProductionOrders, useCreateProductionOrderWithAnalysis, useUpdateProductionOrder, useDeleteProductionOrder, useEnhancedProductionOrder, useProductionOrderComponents, useUpdateComponentStatus, useProductionOrderReservations, useAnalyzeStockAvailability } from '@/hooks/use-production-orders';
+import { useProductionOrders, useCreateProductionOrder, useCreateMultipleProductionOrders, useCreateProductionOrderWithAnalysis, useUpdateProductionOrder, useDeleteProductionOrder, useCompleteProductionOrder, useEnhancedProductionOrder, useProductionOrderComponents, useUpdateComponentStatus, useProductionOrderReservations, useAnalyzeStockAvailability } from '@/hooks/use-production-orders';
 import { useBOMs } from '@/hooks/use-bom';
 import { useProducts } from '@/hooks/use-products';
 import { useWarehouses } from '@/hooks/use-warehouses';
@@ -128,6 +128,7 @@ export default function ProductionOrdersPage() {
   const createMultipleOrders = useCreateMultipleProductionOrders();
   const createOrderWithAnalysis = useCreateProductionOrderWithAnalysis();
   const updateOrder = useUpdateProductionOrder();
+  const completeOrder = useCompleteProductionOrder();
   const deleteOrder = useDeleteProductionOrder();
   const updateComponentStatus = useUpdateComponentStatus();
   const analyzeStock = useAnalyzeStockAvailability();
@@ -427,18 +428,28 @@ export default function ProductionOrdersPage() {
     }
     
     try {
-      await updateOrder.mutateAsync({
-        id: orderId,
-        data: { status: newStatus },
-      });
-      
-      // Show success message based on status
       if (newStatus === 'COMPLETED') {
-        alert('Production order marked as completed. Stock has been consumed and final product added to inventory.');
-      } else if (newStatus === 'CANCELLED') {
-        alert('Production order cancelled. Stock reservations have been released.');
+        // Use the completion endpoint for completing orders
+        await completeOrder.mutateAsync({
+          id: orderId,
+          completedQuantity: order.planned_quantity,
+          scrappedQuantity: 0,
+          notes: 'Completed via frontend'
+        });
+        alert('Production order completed successfully! Stock has been consumed and finished product added to inventory.');
       } else {
-        alert(`Production order status updated to ${newStatus}.`);
+        // Use the update endpoint for other status changes
+        await updateOrder.mutateAsync({
+          id: orderId,
+          data: { status: newStatus },
+        });
+        
+        // Show success message based on status
+        if (newStatus === 'CANCELLED') {
+          alert('Production order cancelled. Stock reservations have been released.');
+        } else {
+          alert(`Production order status updated to ${newStatus}.`);
+        }
       }
     } catch (error) {
       const errorMessage = handleAPIError(error);

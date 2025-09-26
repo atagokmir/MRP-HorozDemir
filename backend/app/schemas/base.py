@@ -144,8 +144,8 @@ def validate_warehouse_code(v: str) -> str:
         raise ValueError('Warehouse code must be a string')
     if not v.replace('-', '').replace('_', '').isalnum():
         raise ValueError('Warehouse code must contain only alphanumeric characters, hyphens, and underscores')
-    if len(v) < 2 or len(v) > 10:
-        raise ValueError('Warehouse code must be between 2 and 10 characters')
+    if len(v) < 2 or len(v) > 20:
+        raise ValueError('Warehouse code must be between 2 and 20 characters')
     return v.upper()
 
 

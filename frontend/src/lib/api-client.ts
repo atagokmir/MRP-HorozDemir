@@ -6,7 +6,7 @@ export class APIClient {
   private baseURL: string;
   private tokenRefreshPromise: Promise<string> | null = null;
 
-  constructor(baseURL = 'http://192.168.1.172:8000/api/v1') {
+  constructor(baseURL = 'http://localhost:8000/api/v1') {
     this.baseURL = baseURL;
   }
 
